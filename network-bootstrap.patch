@@ -1,24 +1,24 @@
 diff --git a/src/net.cpp b/src/net.cpp
 --- a/src/net.cpp
 +++ b/src/net.cpp
-@@
+@@ -70,6 +70,11 @@
  set<CNetAddr> setservAddNodeAddresses;
  CCriticalSection cs_setservAddNodeAddresses;
 +
-+// Live addnode list shared with the RPC layer.  Unlike mapMultiArgs,
++// Live addnode list shared with the RPC layer. Unlike mapMultiArgs,
 +// this can safely be changed while the daemon is running.
 +vector<string> vAddedNodes;
 +CCriticalSection cs_vAddedNodes;
  
  static CSemaphore *semOutbound = NULL;
-@@
+@@ -1240,6 +1245,6 @@
  static const char *strDNSSeed[][2] = {
 -    {"freakchain.freakhouse.dev", "173.249.22.117"},
 -    {"dnsseed.freakhouse.dev", "144.91.108.205"},
 +    {"207.244.243.35", "207.244.243.35"},
 +    {"198.48.239.248", "198.48.239.248"},
  };
-@@
+@@ -1545,35 +1550,48 @@
  void ThreadOpenAddedConnections2(void* parg)
  {
      printf("ThreadOpenAddedConnections started\n");
@@ -101,7 +101,7 @@ diff --git a/src/net.cpp b/src/net.cpp
          // Attempt to connect to each IP for each addnode entry until at least one is successful per addnode entry
          // (keeping in mind that addnode entries can have many IPs if fNameLookup)
          {
-@@
+@@ -1590,13 +1608,14 @@
          BOOST_FOREACH(vector<CService>& vserv, vservConnectAddresses)
          {
              CSemaphoreGrant grant(*semOutbound);
@@ -115,23 +115,23 @@ diff --git a/src/net.cpp b/src/net.cpp
          if (fShutdown)
              return;
          vnThreadsRunning[THREAD_ADDEDCONNECTIONS]--;
-@@
+@@ -1605,6 +1624,6 @@
      }
  }
 
 diff --git a/src/bitcoinrpc.cpp b/src/bitcoinrpc.cpp
 --- a/src/bitcoinrpc.cpp
 +++ b/src/bitcoinrpc.cpp
-@@
+@@ -28,6 +28,8 @@
  using namespace boost::asio;
  using namespace json_spirit;
  
 +Value addnode(const Array& params, bool fHelp);
 +
  void ThreadRPCServer2(void* parg);
-@@
+@@ -230,6 +232,7 @@
      { "getblockcount",          &getblockcount,          true,   false },
      { "getconnectioncount",     &getconnectioncount,     true,   false },
      { "getpeerinfo",            &getpeerinfo,            true,   false },
-+    { "addnode",                &addnode,                true,   true  },
++    { "addnode",                &addnode,                 true,   true  },
      { "getdifficulty",          &getdifficulty,          true,   false },
