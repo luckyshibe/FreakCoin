@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Modernize src/bignum.h for OpenSSL 1.1+ opaque BIGNUM.
 
-This is intentionally conservative.  It only rewrites the exact legacy
+This is intentionally conservative. It only rewrites the exact legacy
 CBigNum class prologue audited in FreakCoin, then replaces uses of `this`
 with the owned BIGNUM pointer only on lines containing OpenSSL BN_* calls.
 It refuses to write the file if the expected legacy source shape is not
@@ -81,7 +81,7 @@ private:
 
 public:
     // Preserve the legacy call style used throughout this codebase:
-    // BN_cmp(&a, &b), BN_add(&r, &a, &b), etc.  With opaque BIGNUM in
+    // BN_cmp(&a, &b), BN_add(&r, &a, &b), etc. With opaque BIGNUM in
     // OpenSSL 1.1+, taking the address of a CBigNum returns its owned BIGNUM.
     BIGNUM* operator&() { return bn; }
     const BIGNUM* operator&() const { return bn; }
@@ -104,7 +104,7 @@ public:
 
     CBigNum& operator=(const CBigNum& b)
     {
-        if (this != std::addressof(b) && !BN_copy(bn, &b))
+        if (!BN_copy(bn, &b))
             throw bignum_error("CBigNum::operator= : BN_copy failed");
         return (*this);
     }
@@ -195,8 +195,9 @@ def main() -> None:
             die(f"post-transform safety marker missing: {marker!r}")
 
     # This count is deliberately checked so a future source change cannot
-    # silently make the transform incomplete.
-    EXPECTED_BN_THIS_REPLACEMENTS = 32
+    # silently make the transform incomplete. The legacy constructor block
+    # is replaced as a unit; these are the remaining BN_* argument uses.
+    EXPECTED_BN_THIS_REPLACEMENTS = 40
     if changed_bn_this != EXPECTED_BN_THIS_REPLACEMENTS:
         die(
             f"expected {EXPECTED_BN_THIS_REPLACEMENTS} BN_* uses of `this`, "
