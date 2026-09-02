@@ -1,0 +1,137 @@
+diff --git a/src/net.cpp b/src/net.cpp
+--- a/src/net.cpp
++++ b/src/net.cpp
+@@
+ set<CNetAddr> setservAddNodeAddresses;
+ CCriticalSection cs_setservAddNodeAddresses;
++
++// Live addnode list shared with the RPC layer.  Unlike mapMultiArgs,
++// this can safely be changed while the daemon is running.
++vector<string> vAddedNodes;
++CCriticalSection cs_vAddedNodes;
+ 
+ static CSemaphore *semOutbound = NULL;
+@@
+ static const char *strDNSSeed[][2] = {
+-    {"freakchain.freakhouse.dev", "173.249.22.117"},
+-    {"dnsseed.freakhouse.dev", "144.91.108.205"},
++    {"207.244.243.35", "207.244.243.35"},
++    {"198.48.239.248", "198.48.239.248"},
+ };
+@@
+ void ThreadOpenAddedConnections2(void* parg)
+ {
+     printf("ThreadOpenAddedConnections started\n");
+ 
+-    if (mapArgs.count("-addnode") == 0)
+-        return;
++    {
++        LOCK(cs_vAddedNodes);
++        vAddedNodes = mapMultiArgs["-addnode"];
++    }
+ 
+     if (HaveNameProxy()) {
+         while(!fShutdown) {
+-            BOOST_FOREACH(string& strAddNode, mapMultiArgs["-addnode"]) {
++            list<string> lAddresses;
++            {
++                LOCK(cs_vAddedNodes);
++                BOOST_FOREACH(string& strAddNode, vAddedNodes)
++                    lAddresses.push_back(strAddNode);
++            }
++            BOOST_FOREACH(string& strAddNode, lAddresses) {
+                 CAddress addr;
+                 CSemaphoreGrant grant(*semOutbound);
+                 OpenNetworkConnection(addr, &grant, strAddNode.c_str());
+                 MilliSleep(500);
++                if (fShutdown)
++                    return;
+             }
+             vnThreadsRunning[THREAD_ADDEDCONNECTIONS]--;
+             MilliSleep(120000); // Retry every 2 minutes
+             vnThreadsRunning[THREAD_ADDEDCONNECTIONS]++;
++            if (fShutdown)
++                return;
+         }
+         return;
+     }
+ 
+-    vector<vector<CService> > vservAddressesToAdd(0);
+-    BOOST_FOREACH(string& strAddNode, mapMultiArgs["-addnode"])
++    unsigned int nLoop = 0;
++    while (true)
+     {
+-        vector<CService> vservNode(0);
+-        if(Lookup(strAddNode.c_str(), vservNode, GetDefaultPort(), fNameLookup, 0))
++        list<string> lAddresses;
+         {
+-            vservAddressesToAdd.push_back(vservNode);
+-            {
+-                LOCK(cs_setservAddNodeAddresses);
+-                BOOST_FOREACH(CService& serv, vservNode)
+-                    setservAddNodeAddresses.insert(serv);
+-            }
++            LOCK(cs_vAddedNodes);
++            BOOST_FOREACH(string& strAddNode, vAddedNodes)
++                lAddresses.push_back(strAddNode);
+         }
+-    }
+-    while (true)
+-    {
+-        vector<vector<CService> > vservConnectAddresses = vservAddressesToAdd;
++
++        vector<vector<CService> > vservConnectAddresses;
++        {
++            LOCK(cs_setservAddNodeAddresses);
++            setservAddNodeAddresses.clear();
++        }
++
++        BOOST_FOREACH(string& strAddNode, lAddresses)
++        {
++            vector<CService> vservNode;
++            if (Lookup(strAddNode.c_str(), vservNode, GetDefaultPort(), fNameLookup, 0) && !vservNode.empty())
++            {
++                vservConnectAddresses.push_back(vservNode);
++                LOCK(cs_setservAddNodeAddresses);
++                BOOST_FOREACH(CService& serv, vservNode)
++                    setservAddNodeAddresses.insert(serv);
++            }
++        }
++
+         // Attempt to connect to each IP for each addnode entry until at least one is successful per addnode entry
+         // (keeping in mind that addnode entries can have many IPs if fNameLookup)
+         {
+@@
+         BOOST_FOREACH(vector<CService>& vserv, vservConnectAddresses)
+         {
+             CSemaphoreGrant grant(*semOutbound);
+-            OpenNetworkConnection(CAddress(*(vserv.begin())), &grant);
++            OpenNetworkConnection(CAddress(vserv[nLoop % vserv.size()]), &grant);
+             MilliSleep(500);
+             if (fShutdown)
+                 return;
+         }
++        nLoop++;
+         if (fShutdown)
+             return;
+         vnThreadsRunning[THREAD_ADDEDCONNECTIONS]--;
+@@
+     }
+ }
+
+diff --git a/src/bitcoinrpc.cpp b/src/bitcoinrpc.cpp
+--- a/src/bitcoinrpc.cpp
++++ b/src/bitcoinrpc.cpp
+@@
+ using namespace boost::asio;
+ using namespace json_spirit;
+ 
++Value addnode(const Array& params, bool fHelp);
++
+ void ThreadRPCServer2(void* parg);
+@@
+     { "getblockcount",          &getblockcount,          true,   false },
+     { "getconnectioncount",     &getconnectioncount,     true,   false },
+     { "getpeerinfo",            &getpeerinfo,            true,   false },
++    { "addnode",                &addnode,                true,   true  },
+     { "getdifficulty",          &getdifficulty,          true,   false },
