@@ -12,6 +12,11 @@
 using namespace json_spirit;
 using namespace std;
 
+// Runtime -addnode list. Defined in net.cpp and shared with the
+// added-connections thread so RPC changes take effect without a restart.
+extern vector<string> vAddedNodes;
+extern CCriticalSection cs_vAddedNodes;
+
 Value getconnectioncount(const Array& params, bool fHelp)
 {
     if (fHelp || params.size() != 0)
@@ -66,6 +71,59 @@ Value getpeerinfo(const Array& params, bool fHelp)
     }
 
     return ret;
+}
+
+Value addnode(const Array& params, bool fHelp)
+{
+    string strCommand = "add";
+    if (params.size() == 2)
+        strCommand = params[1].get_str();
+
+    if (fHelp || params.size() < 1 || params.size() > 2 ||
+        (strCommand != "onetry" && strCommand != "add" && strCommand != "remove"))
+        throw runtime_error(
+            "addnode <node> [add|remove|onetry]\n"
+            "Add or remove <node> from the live addnode list, or try it once.\n"
+            "With no action specified, 'add' is used. A leading '=' before <node> is accepted.");
+
+    string strNode = params[0].get_str();
+    if (!strNode.empty() && strNode[0] == '=')
+        strNode.erase(0, 1);
+    if (strNode.empty())
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Node address cannot be empty");
+
+    if (strCommand == "onetry")
+    {
+        AddOneShot(strNode);
+        return Value::null;
+    }
+
+    {
+        LOCK(cs_vAddedNodes);
+        vector<string>::iterator it = vAddedNodes.begin();
+        for (; it != vAddedNodes.end(); ++it)
+            if (strNode == *it)
+                break;
+
+        if (strCommand == "add")
+        {
+            if (it != vAddedNodes.end())
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: Node already added");
+            vAddedNodes.push_back(strNode);
+        }
+        else
+        {
+            if (it == vAddedNodes.end())
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: Node has not been added");
+            vAddedNodes.erase(it);
+        }
+    }
+
+    // Do not wait for the two-minute persistent retry cycle when adding a node.
+    if (strCommand == "add")
+        AddOneShot(strNode);
+
+    return Value::null;
 }
  
 // ppcoin: send alert.  
