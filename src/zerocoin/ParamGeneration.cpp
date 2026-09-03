@@ -10,6 +10,7 @@
 /// \license    This project is released under the MIT license.
 
 #include <string>
+#include <memory>
 #include "Zerocoin.h"
 
 using namespace std;
@@ -250,8 +251,8 @@ deriveIntegerGroupParams(uint256 seed, uint32_t pLen, uint32_t qLen)
 	// Calculate "p" and "q" and "domain_parameter_seed" from the
 	// "seed" buffer above, using the procedure described in NIST
 	// FIPS 186-3, Appendix A.1.2.
-	calculateGroupModulusAndOrder(seed, pLen, qLen, &(result.modulus),
-	                              &(result.groupOrder), &pSeed, &qSeed);
+	calculateGroupModulusAndOrder(seed, pLen, qLen, std::addressof(result.modulus),
+	                              std::addressof(result.groupOrder), &pSeed, &qSeed);
 
 	// Calculate the generators "g", "h" using the process described in
 	// NIST FIPS 186-3, Appendix A.2.3. This algorithm takes ("p", "q",

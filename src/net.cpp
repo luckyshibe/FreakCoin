@@ -30,12 +30,12 @@ void ThreadMessageHandler2(void* parg);
 void ThreadSocketHandler2(void* parg);
 void ThreadOpenConnections2(void* parg);
 void ThreadOpenAddedConnections2(void* parg);
+
 #ifdef USE_UPNP
 void ThreadMapPort2(void* parg);
 #endif
 void ThreadDNSAddressSeed2(void* parg);
 bool OpenNetworkConnection(const CAddress& addrConnect, CSemaphoreGrant *grantOutbound = NULL, const char *strDest = NULL, bool fOneShot = false);
-
 
 struct LocalServiceInfo {
     int nScore;
@@ -61,6 +61,10 @@ CAddrMan addrman;
 
 vector<CNode*> vNodes;
 CCriticalSection cs_vNodes;
+
+vector<string> vAddedNodes;
+CCriticalSection cs_vAddedNodes;
+
 map<CInv, CDataStream> mapRelay;
 deque<pair<int64_t, CInv> > vRelayExpiration;
 CCriticalSection cs_mapRelay;
@@ -1230,8 +1234,8 @@ void MapPort()
 // The first name is used as information source for addrman.
 // The second name should resolve to a list of seed addresses.
 static const char *strDNSSeed[][2] = {
-    {"freakchain.freakhouse.dev", "173.249.22.117"},
-    {"dnsseed.freakhouse.dev", "144.91.108.205"},
+    {"207.244.243.35", "207.244.243.35"},
+    {"198.48.239.248", "198.48.239.248"},
 };
 
 void ThreadDNSAddressSeed(void* parg)
@@ -1549,70 +1553,26 @@ void ThreadOpenAddedConnections2(void* parg)
 {
     printf("ThreadOpenAddedConnections started\n");
 
-    if (mapArgs.count("-addnode") == 0)
-        return;
-
-    if (HaveNameProxy()) {
-        while(!fShutdown) {
-            BOOST_FOREACH(string& strAddNode, mapMultiArgs["-addnode"]) {
-                CAddress addr;
-                CSemaphoreGrant grant(*semOutbound);
-                OpenNetworkConnection(addr, &grant, strAddNode.c_str());
-                MilliSleep(500);
-            }
-            vnThreadsRunning[THREAD_ADDEDCONNECTIONS]--;
-            MilliSleep(120000); // Retry every 2 minutes
-            vnThreadsRunning[THREAD_ADDEDCONNECTIONS]++;
-        }
-        return;
-    }
-
-    vector<vector<CService> > vservAddressesToAdd(0);
-    BOOST_FOREACH(string& strAddNode, mapMultiArgs["-addnode"])
+    while (!fShutdown)
     {
-        vector<CService> vservNode(0);
-        if(Lookup(strAddNode.c_str(), vservNode, GetDefaultPort(), fNameLookup, 0))
+        vector<string> vNodesToAdd;
+
         {
-            vservAddressesToAdd.push_back(vservNode);
-            {
-                LOCK(cs_setservAddNodeAddresses);
-                BOOST_FOREACH(CService& serv, vservNode)
-                    setservAddNodeAddresses.insert(serv);
-            }
+            LOCK(cs_vAddedNodes);
+            vNodesToAdd = vAddedNodes;
         }
-    }
-    while (true)
-    {
-        vector<vector<CService> > vservConnectAddresses = vservAddressesToAdd;
-        // Attempt to connect to each IP for each addnode entry until at least one is successful per addnode entry
-        // (keeping in mind that addnode entries can have many IPs if fNameLookup)
+
+        BOOST_FOREACH(string& strAddNode, vNodesToAdd)
         {
-            LOCK(cs_vNodes);
-            BOOST_FOREACH(CNode* pnode, vNodes)
-                for (vector<vector<CService> >::iterator it = vservConnectAddresses.begin(); it != vservConnectAddresses.end(); it++)
-                    BOOST_FOREACH(CService& addrNode, *(it))
-                        if (pnode->addr == addrNode)
-                        {
-                            it = vservConnectAddresses.erase(it);
-                            it--;
-                            break;
-                        }
-        }
-        BOOST_FOREACH(vector<CService>& vserv, vservConnectAddresses)
-        {
+            CAddress addr;
             CSemaphoreGrant grant(*semOutbound);
-            OpenNetworkConnection(CAddress(*(vserv.begin())), &grant);
+            OpenNetworkConnection(addr, &grant, strAddNode.c_str());
             MilliSleep(500);
-            if (fShutdown)
-                return;
         }
-        if (fShutdown)
-            return;
+
         vnThreadsRunning[THREAD_ADDEDCONNECTIONS]--;
         MilliSleep(120000); // Retry every 2 minutes
         vnThreadsRunning[THREAD_ADDEDCONNECTIONS]++;
-        if (fShutdown)
-            return;
     }
 }
 
@@ -1937,6 +1897,11 @@ void StartNode(void* parg)
         printf("Error: NewThread(ThreadSocketHandler) failed\n");
 
     // Initiate outbound connections from -addnode
+    {
+        LOCK(cs_vAddedNodes);
+        vAddedNodes = mapMultiArgs["-addnode"];
+    }
+
     if (!NewThread(ThreadOpenAddedConnections, NULL))
         printf("Error: NewThread(ThreadOpenAddedConnections) failed\n");
 

@@ -35,9 +35,12 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// Avoid collision between Win32 RPC byte typedef and C++17 std::byte.
+#define byte win32_byte
 #include "shlwapi.h"
 #include "shlobj.h"
 #include "shellapi.h"
+#undef byte
 #endif
 
 namespace GUIUtil {
