@@ -13,8 +13,9 @@
 
 #include <db_cxx.h>
 
-#if DB_VERSION_MAJOR != 4 || DB_VERSION_MINOR != 8
-#error FreakChain wallet compatibility requires Berkeley DB 4.8 headers and libraries.
+#if !((DB_VERSION_MAJOR == 4 && DB_VERSION_MINOR == 8) || \
+      (DB_VERSION_MAJOR == 5 && DB_VERSION_MINOR == 3))
+#error FreakChain supports Berkeley DB 4.8 and 5.3. Match the existing wallet environment's version.
 #endif
 
 class CAddress;

@@ -53,7 +53,7 @@ struct TestEnvironment {
         mapArgs["-listen"] = "0";
         mapArgs["-staking"] = "0";
         if (!bitdb.Open(GetDataDir()))
-            throw std::runtime_error("Cannot open temporary BDB 4.8 environment");
+            throw std::runtime_error("Cannot open temporary Berkeley DB environment");
     }
     ~TestEnvironment() {
         failRandomCall = 0;

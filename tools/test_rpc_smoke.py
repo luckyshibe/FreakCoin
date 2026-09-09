@@ -172,8 +172,17 @@ def main():
             node.ready()
             assert node.listener_addresses() == [ipaddress.ip_address("127.0.0.1")], "Explicit RPC binding was not honored"
             assert node.call("dumpprivkey", [address]) == private_key, "Backup restore lost its key"
+            # Exercise recovery of an existing log environment, not just clean
+            # startup. This kills only this disposable, isolated test daemon.
+            assert list((node.directory / "database").glob("log.*")), "No BDB logs to test"
+            node.process.kill()
+            node.wait_stopped()
+            assert list((node.directory / "database").glob("log.*")), "BDB logs were not retained"
+            node.start()
+            node.ready()
+            assert node.call("dumpprivkey", [address]) == private_key, "Log recovery lost the wallet key"
             node.stop()
-            print("PASS: backup restore and explicit IPv4 RPC binding", flush=True)
+            print("PASS: backup restore, retained-log crash recovery, and explicit IPv4 RPC binding", flush=True)
             node = Node(binary, directory / "bad-bind", blocked.getsockname()[1], ["invalid-address"])
             node.start()
             node.wait_stopped()

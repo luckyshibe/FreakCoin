@@ -18,15 +18,22 @@ file hashes shown in the supplied VPS diff.
 git clone --single-branch --branch network-bootstrap https://github.com/luckyshibe/FreakCoin.git FreakCoin-stabilization
 cd FreakCoin-stabilization
 git rev-parse HEAD
-python3 tools/build_linux.py --jobs 2
+python3 tools/build_linux.py --bdb-version 5.3 --jobs 2
 ```
 
 The helper checks tools, compiles and runs a dependency probe, and builds
 `src/FreakChaind`. It installs nothing and does not start the daemon on your
 wallet or connect to the pool. UPnP is disabled in this build path.
 
-The agreed pool workflow is compile, back up the wallet and installed binary,
-stop the current daemon, replace the binary, and test on the existing chain.
+The pool's previous working daemon uses Berkeley DB 5.3. The command above
+deliberately keeps that version. For an existing 4.8 environment, select
+`--bdb-version 4.8` instead. The helper requires an explicit selection and checks
+that the headers and runtime library match it before building. It forces a full
+rebuild on the first explicit selection or when switching versions.
+
+The agreed pool workflow is compile, preserve the installed binary, stop the
+current daemon, back up the entire data directory while stopped, replace the
+binary, and test on the existing chain.
 Keep the existing data directory, RPC credentials, and block notification
 configuration. A failed build is not a reason to stop or replace the daemon.
 
@@ -35,7 +42,7 @@ configuration. A failed build is not a reason to stop or replace the daemon.
 These checks were run during development; they are available on the VPS too:
 
 ```sh
-python3 tools/build_linux.py --check --jobs 2
+python3 tools/build_linux.py --bdb-version 5.3 --check --jobs 2
 python3 tools/test_rpc_smoke.py
 ```
 
@@ -52,12 +59,23 @@ zero-peer node, rather than requiring a peer or issuing work before sync.
 If dependencies are outside standard locations, supply the paths used by the
 working Linux build through `BOOST_INCLUDE_PATH`, `BOOST_LIB_PATH`,
 `BDB_INCLUDE_PATH`, `BDB_LIB_PATH`, `OPENSSL_INCLUDE_PATH`, and
-`OPENSSL_LIB_PATH`. `BDB_LIB_SUFFIX` defaults to `-4.8` and `BOOST_LIB_SUFFIX`
+`OPENSSL_LIB_PATH`. `BDB_LIB_SUFFIX` defaults to the selected version (for example,
+`-5.3`) and `BOOST_LIB_SUFFIX`
 defaults to empty. `CXX`, `CXXFLAGS`, and `LDFLAGS` are supported. Use
 `--preflight-only` to check these settings without compiling the project.
 
-Berkeley DB 4.8 is required both at compile time and when opening the wallet
-environment. Using a newer BDB library to get past a build error is not supported.
+Berkeley DB 4.8 and 5.3 are supported; preserve the version used by each existing
+installation. They do not have interchangeable transaction-log environments.
+The earlier candidate incorrectly required 4.8 on the 5.3 Linux pool and failed
+with `unsupported log version 19`. Restarting the previous 5.3 executable restored
+wallet access. Do not delete logs or switch BDB versions to get past startup errors.
+Startup now records the BDB version and directs users to preserve the directory
+and inspect the logs instead of suggesting deletion.
+
+Shared Linux/Qt source accepts both versions. Keep the existing Windows 4.8
+dependency setup; this change is not a wallet migration or a promise that a
+Linux data directory can be copied into a Windows 4.8 installation. Wallet
+transfer between those builds needs separate validation before release.
 The test suite requires Linux and a linker supporting `--wrap=RAND_bytes`.
 
 ## What the offline tests cover
@@ -151,3 +169,25 @@ These checks used synthetic wallets only. Windows/Qt compilation, Windows ACL
 behavior, historical-chain replay, live peer/failover load tests, and the pool's
 Yiimp/solo-staking behavior still require their own validation. The rewrite test
 injects a rename failure and verifies rollback; it is not a power-loss test.
+
+### Berkeley DB compatibility correction
+
+The corrected shared source was built on Linux with both BDB 4.8.30 and 5.3.28,
+using the GCC/Boost/OpenSSL versions above. Both builds passed all 10 offline
+cases and the RPC smoke script, including its new forced-process-exit test:
+restart with the existing transaction logs present and verify that the synthetic
+wallet's private key is recovered. This tests process-crash recovery, not power
+loss or migration between BDB versions.
+
+The 5.3 dependency came from official Berkeley DB tag `v5.3.28`, commit
+`e66a5e66d5a8db89d13532012f28d17d375e8564`, with the same static C++ build options
+and compiler-helper rename described above (`src/dbinc/atomic.h` in this version).
+The version-switch build was forced in full after a stale-object failure; the
+helper now forces rebuilds when the BDB selection changes or is unrecorded.
+Separate preflight checks rejected a missing selection, wrong headers, and a
+5.3-header/4.8-library mismatch before building project objects. A simulated
+failed version switch also confirmed that returning to the previous version
+forces a rebuild rather than trusting partially replaced objects.
+
+These tests do not yet validate a Windows build or a transfer of wallets between
+4.8 and 5.3. The production pool should continue using 5.3.

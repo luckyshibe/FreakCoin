@@ -564,8 +564,9 @@ bool AppInit2()
     if (!bitdb.Open(GetDataDir()))
     {
         string msg = strprintf(_("Error initializing database environment %s!"
-                                 " To recover, BACKUP THAT DIRECTORY, then remove"
-                                 " everything from it except for wallet.dat."), strDataDir.c_str());
+                                 " Preserve the entire directory, including wallet.dat and database logs."
+                                 " Check db.log and debug.log; use the Berkeley DB version from the last working build."
+                                 " Do not delete database files or logs."), strDataDir.c_str());
         return InitError(msg);
     }
 
@@ -707,8 +708,9 @@ bool AppInit2()
     if (!bitdb.Open(GetDataDir()))
     {
         string msg = strprintf(_("Error initializing database environment %s!"
-                                 " To recover, BACKUP THAT DIRECTORY, then remove"
-                                 " everything from it except for wallet.dat."), strDataDir.c_str());
+                                 " Preserve the entire directory, including wallet.dat and database logs."
+                                 " Check db.log and debug.log; use the Berkeley DB version from the last working build."
+                                 " Do not delete database files or logs."), strDataDir.c_str());
         return InitError(msg);
     }
 

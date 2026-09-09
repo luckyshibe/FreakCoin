@@ -65,8 +65,11 @@ bool CDBEnv::Open(boost::filesystem::path pathEnv_)
 
     int major = 0, minor = 0, patch = 0;
     DbEnv::version(&major, &minor, &patch);
-    if (major != 4 || minor != 8)
-        return error("Wallet compatibility requires Berkeley DB 4.8; linked library is %d.%d.%d", major, minor, patch);
+    if (major != DB_VERSION_MAJOR || minor != DB_VERSION_MINOR)
+        return error("Berkeley DB headers %d.%d do not match linked library %d.%d.%d",
+                     DB_VERSION_MAJOR, DB_VERSION_MINOR, major, minor, patch);
+    printf("Using Berkeley DB %d.%d.%d (headers %d.%d.%d)\n",
+           major, minor, patch, DB_VERSION_MAJOR, DB_VERSION_MINOR, DB_VERSION_PATCH);
 
     if (fShutdown)
         return false;
