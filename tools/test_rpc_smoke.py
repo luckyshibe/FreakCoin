@@ -134,6 +134,11 @@ def main():
             node.start()
             node.ready()
             assert node.call("getblockhash", [0]) == "000070a13350d97ff6cac06eebcb1ef837b74ebe924d5117cee85a384640e14e", "Mainnet genesis hash changed"
+            assert node.call("getconnectioncount") == 0, "Smoke-test node unexpectedly has peers"
+            for method in ("getworkex", "getwork", "getblocktemplate"):
+                _, response = node.rpc(method)
+                assert response["error"] and response["error"]["code"] == -10, "Mining RPC did not retain its initial-sync guard: " + method
+            print("PASS: all three mining RPCs retain initial-sync protection with zero peers", flush=True)
             listeners = node.listener_addresses()
             assert listeners and all(address.is_loopback for address in listeners), "RPC has a non-loopback listener"
             assert node.rpc("getinfo", bad_password=True)[0] == 401, "Invalid RPC credentials were accepted"

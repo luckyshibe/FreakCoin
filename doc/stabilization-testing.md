@@ -9,20 +9,35 @@ transaction validation, the database-version constant, or wallet serialization.
 
 Keep the source used to build the running daemon, its local changes, its binary,
 and the known-good x64 Windows environment. A fresh clone avoids overwriting any
-VPS-only fixes. In particular, GitHub's mining/staking peer gates still need
-reconciliation with the solo-staking changes described in the project handoff.
+other VPS-only changes. The five solo-mining/staking edits supplied from
+`~/compil/FreakCoin` at commit `7f8feb13091d0fef399909e82c21d16b35a0823b`
+are now committed directly in this branch. Both mining source files match the
+file hashes shown in the supplied VPS diff.
 
 ```sh
 git clone --single-branch --branch network-bootstrap https://github.com/luckyshibe/FreakCoin.git FreakCoin-stabilization
 cd FreakCoin-stabilization
 git rev-parse HEAD
+python3 tools/build_linux.py --jobs 2
+```
+
+The helper checks tools, compiles and runs a dependency probe, and builds
+`src/FreakChaind`. It installs nothing and does not start the daemon on your
+wallet or connect to the pool. UPnP is disabled in this build path.
+
+The agreed pool workflow is compile, back up the wallet and installed binary,
+stop the current daemon, replace the binary, and test on the existing chain.
+Keep the existing data directory, RPC credentials, and block notification
+configuration. A failed build is not a reason to stop or replace the daemon.
+
+## Optional automated checks
+
+These checks were run during development; they are available on the VPS too:
+
+```sh
 python3 tools/build_linux.py --check --jobs 2
 python3 tools/test_rpc_smoke.py
 ```
-
-The helper checks tools, compiles and runs a dependency probe, builds the daemon,
-and runs the offline tests. It installs nothing and does not start the daemon on
-your wallet or connect to the pool. UPnP is disabled in this build path.
 
 The smoke-test script launches the candidate on private temporary wallets. RPC
 listens on local ephemeral ports; P2P attempts target a reserved, non-listening
@@ -31,6 +46,8 @@ restart, staking-only unlock restrictions, backup restore, and invalid binding.
 It never selects the production configuration or data directory.
 It also checks the mainnet genesis hash and verifies that unsupported modes and
 an invalid inbound connection budget fail before the chain database is loaded.
+All three mining RPCs must still report initial synchronization on a fresh
+zero-peer node, rather than requiring a peer or issuing work before sync.
 
 If dependencies are outside standard locations, supply the paths used by the
 working Linux build through `BOOST_INCLUDE_PATH`, `BOOST_LIB_PATH`,
@@ -79,6 +96,10 @@ also rejected because its parameter object is not initialized.
 - One-shot peer requests remain queued until an outbound slot is available.
   The orphan cache is limited to 750 blocks and 64 MiB of serialized block data;
   this is cache policy, not a change to valid-block rules.
+- The pool's existing solo-mining/staking edits are preserved: zero peers alone
+  do not block staking or `getworkex`, `getwork`, and `getblocktemplate`.
+  Initial-sync protection remains active. The extra staking synchronization
+  delay applies when connected peers report a greater height.
 - Wallet encryption checks randomness and database writes. After encryption is
   committed, incomplete cleanup is reported explicitly and the wallet remains
   locked. The RPC/GUI asks the process to stop; preserve the passphrase and all
@@ -89,22 +110,19 @@ also rejected because its parameter object is not initialized.
 - An incompatible block-index version stops startup. It no longer deletes the
   index and block files. No automatic version migration is implemented.
 
-## Gates before replacing the pool binary
+## Pool checks after replacement
 
-1. Reconcile the source/diff used by the running daemon, especially solo staking.
-2. Preserve the current binary, wallet, and both chain histories involved in the
-   earlier fork investigation. Verify chain agreement using hashes at common
-   heights, chain trust, and checkpoint state.
-3. Run candidate RPC and wallet checks in a separate temporary data directory,
-   with discovery, P2P listening, and staking disabled and P2P attempts restricted
-   to the reserved loopback port used by the smoke-test script.
-4. Check actual listener addresses locally, then exercise the existing Yiimp
-   mining RPCs and block notification in a controlled test arrangement.
-5. Keep the current production `blocknotify` command and RPC credentials intact.
+Confirm that the wallet opens with its existing balances and chain tip, RPC
+listens on localhost, Yiimp obtains work and submits blocks, block notifications
+arrive, and staking resumes when the existing wallet is unlocked for staking.
+Keep the previous binary and wallet backup available for rollback.
 
-Passing the offline suite establishes a candidate for VPS testing. It does not
-establish historical-chain equivalence, Windows compatibility, or readiness to
-replace the running daemon. Windows x86 remains a separate later build.
+The earlier fork investigation remains separate: preserve both chain histories
+and compare common-height hashes, chain trust, and checkpoint state. A larger
+height alone does not identify the history to keep.
+
+Development checks do not establish historical-chain equivalence or Windows
+compatibility. Windows x86 remains a separate later build.
 
 ## Verification recorded on 9 September 2026
 
@@ -113,6 +131,13 @@ GCC 13.3, the default `-O2` optimization and hardening flags, Boost 1.83.0,
 Berkeley DB 4.8.30, and OpenSSL 3.0.13. All 10 offline cases passed. The runtime
 script passed its listener/authentication, encrypted restart, staking-only
 unlock, backup restore, binding failure, genesis, and startup-guard checks.
+
+After applying the supplied VPS solo-mining/staking diff, the Linux build,
+all 10 offline cases, and the runtime script passed again. The runtime check
+also confirmed that `getworkex`, `getwork`, and `getblocktemplate` each return
+the initial-sync error on a fresh zero-peer node. The reconciled source hashes
+are `295e24f5af47f397525f79d6e4dcb8fd1419be1d` (`src/miner.cpp`) and
+`6f1d49ea6493a271e92d59917d7b246379617b2f` (`src/rpcmining.cpp`).
 
 The local dependency sources were Boost commit
 `564e2ac16907019696cdaba8a93e3588ec596062` (with its pinned submodules) and
