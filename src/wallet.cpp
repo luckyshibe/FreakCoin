@@ -257,22 +257,26 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
     RandAddSeedPerfmon();
 
     vMasterKey.resize(WALLET_CRYPTO_KEY_SIZE);
-    RAND_bytes(&vMasterKey[0], WALLET_CRYPTO_KEY_SIZE);
+    if (RAND_bytes(&vMasterKey[0], WALLET_CRYPTO_KEY_SIZE) != 1)
+        return error("EncryptWallet: secure master-key generation failed");
 
     CMasterKey kMasterKey(nDerivationMethodIndex);
 
     RandAddSeedPerfmon();
     kMasterKey.vchSalt.resize(WALLET_CRYPTO_SALT_SIZE);
-    RAND_bytes(&kMasterKey.vchSalt[0], WALLET_CRYPTO_SALT_SIZE);
+    if (RAND_bytes(&kMasterKey.vchSalt[0], WALLET_CRYPTO_SALT_SIZE) != 1)
+        return error("EncryptWallet: secure salt generation failed");
 
     CCrypter crypter;
     int64_t nStartTime = GetTimeMillis();
-    crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, 25000, kMasterKey.nDerivationMethod);
-    kMasterKey.nDeriveIterations = 2500000 / ((double)(GetTimeMillis() - nStartTime));
+    if (!crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, 25000, kMasterKey.nDerivationMethod))
+        return false;
+    kMasterKey.nDeriveIterations = 2500000 / max((int64_t)1, GetTimeMillis() - nStartTime);
 
     nStartTime = GetTimeMillis();
-    crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, kMasterKey.nDeriveIterations, kMasterKey.nDerivationMethod);
-    kMasterKey.nDeriveIterations = (kMasterKey.nDeriveIterations + kMasterKey.nDeriveIterations * 100 / ((double)(GetTimeMillis() - nStartTime))) / 2;
+    if (!crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, kMasterKey.nDeriveIterations, kMasterKey.nDerivationMethod))
+        return false;
+    kMasterKey.nDeriveIterations = (kMasterKey.nDeriveIterations + kMasterKey.nDeriveIterations * 100 / max((int64_t)1, GetTimeMillis() - nStartTime)) / 2;
 
     if (kMasterKey.nDeriveIterations < 25000)
         kMasterKey.nDeriveIterations = 25000;
@@ -284,16 +288,27 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
     if (!crypter.Encrypt(vMasterKey, kMasterKey.vchCryptedKey))
         return false;
 
+    bool fCleanupComplete = true;
     {
         LOCK(cs_wallet);
-        mapMasterKeys[++nMasterKeyMaxID] = kMasterKey;
+        const unsigned int nNewMasterKeyID = nMasterKeyMaxID + 1;
         if (fFileBacked)
         {
             pwalletdbEncryption = new CWalletDB(strWalletFile);
-            if (!pwalletdbEncryption->TxnBegin())
+            if (!pwalletdbEncryption->TxnBegin()) {
+                delete pwalletdbEncryption;
+                pwalletdbEncryption = NULL;
                 return false;
-            pwalletdbEncryption->WriteMasterKey(nMasterKeyMaxID, kMasterKey);
+            }
+            if (!pwalletdbEncryption->WriteMasterKey(nNewMasterKeyID, kMasterKey)) {
+                pwalletdbEncryption->TxnAbort();
+                delete pwalletdbEncryption;
+                pwalletdbEncryption = NULL;
+                return false;
+            }
         }
+        mapMasterKeys[nNewMasterKeyID] = kMasterKey;
+        nMasterKeyMaxID = nNewMasterKeyID;
 
         if (!EncryptKeys(vMasterKey))
         {
@@ -307,7 +322,7 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
 
         if (fFileBacked)
         {
-            if (!pwalletdbEncryption->TxnCommit())
+            if (!pwalletdbEncryption->TxnCommit(DB_TXN_SYNC))
                 exit(1); //We now have keys encrypted in memory, but no on disk...die to avoid confusion and let the user reload their unencrypted wallet.
 
             delete pwalletdbEncryption;
@@ -315,17 +330,24 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
         }
 
         Lock();
-        Unlock(strWalletPassphrase);
-        NewKeyPool();
+        try {
+            fCleanupComplete = Unlock(strWalletPassphrase) && NewKeyPool();
+        } catch (const std::exception& e) {
+            printf("EncryptWallet: key-pool cleanup failed: %s\n", e.what());
+            fCleanupComplete = false;
+        }
         Lock();
 
         // Need to completely rewrite the wallet file; if we don't, bdb might keep
         // bits of the unencrypted private key in slack space in the database file.
-        CDB::Rewrite(strWalletFile);
+        if (fFileBacked && !CDB::Rewrite(strWalletFile))
+            fCleanupComplete = false;
 
     }
     NotifyStatusChanged(this);
 
+    if (!fCleanupComplete)
+        return error("Wallet encryption was committed, but cleanup did not complete. The wallet is locked; preserve its files and the passphrase.");
     return true;
 }
 
@@ -1997,19 +2019,20 @@ bool CWallet::NewKeyPool()
 {
     {
         LOCK(cs_wallet);
-        CWalletDB walletdb(strWalletFile);
-        BOOST_FOREACH(int64_t nIndex, setKeyPool)
-            walletdb.ErasePool(nIndex);
-        setKeyPool.clear();
-
         if (IsLocked())
             return false;
+        CWalletDB walletdb(strWalletFile);
+        BOOST_FOREACH(int64_t nIndex, setKeyPool)
+            if (!walletdb.ErasePool(nIndex))
+                return false;
+        setKeyPool.clear();
 
         int64_t nKeys = max(GetArg("-keypool", 100), (int64_t)0);
         for (int i = 0; i < nKeys; i++)
         {
             int64_t nIndex = i+1;
-            walletdb.WritePool(nIndex, CKeyPool(GenerateNewKey()));
+            if (!walletdb.WritePool(nIndex, CKeyPool(GenerateNewKey())))
+                return false;
             setKeyPool.insert(nIndex);
         }
         printf("CWallet::NewKeyPool wrote %"PRId64" new keys\n", nKeys);

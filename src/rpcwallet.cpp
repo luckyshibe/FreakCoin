@@ -1545,8 +1545,14 @@ Value encryptwallet(const Array& params, bool fHelp)
             "encryptwallet <passphrase>\n"
             "Encrypts the wallet with <passphrase>.");
 
-    if (!pwalletMain->EncryptWallet(strWalletPass))
+    if (!pwalletMain->EncryptWallet(strWalletPass)) {
+        if (pwalletMain->IsCrypted()) {
+            StartShutdown();
+            throw JSONRPCError(RPC_WALLET_ENCRYPTION_FAILED,
+                "Wallet encryption was committed, but cleanup failed. The wallet is locked and the server is stopping. Preserve the passphrase, wallet files and database logs before recovery.");
+        }
         throw JSONRPCError(RPC_WALLET_ENCRYPTION_FAILED, "Error: Failed to encrypt the wallet.");
+    }
 
     // BDB seems to have a bad habit of writing old data into
     // slack space in .dat files; that is bad if the old data is

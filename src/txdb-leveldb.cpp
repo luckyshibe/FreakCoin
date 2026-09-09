@@ -33,27 +33,9 @@ static leveldb::Options GetOptions() {
     return options;
 }
 
-void init_blockindex(leveldb::Options& options, bool fRemoveOld = false) {
+void init_blockindex(leveldb::Options& options) {
     // First time init.
     boost::filesystem::path directory = GetDataDir() / "txleveldb";
-
-    if (fRemoveOld) {
-        boost::filesystem::remove_all(directory); // remove directory
-        unsigned int nFile = 1;
-
-        while (true)
-        {
-            boost::filesystem::path strBlockFile = GetDataDir() / strprintf("blk%04u.dat", nFile);
-
-            // Break if no such file
-            if( !boost::filesystem::exists( strBlockFile ) )
-                break;
-
-            boost::filesystem::remove(strBlockFile);
-
-            nFile++;
-        }
-    }
 
     boost::filesystem::create_directory(directory);
     printf("Opening LevelDB in %s\n", directory.string().c_str());
@@ -80,41 +62,44 @@ CTxDB::CTxDB(const char* pszMode)
 
     options = GetOptions();
     options.create_if_missing = fCreate;
-    options.filter_policy = leveldb::NewBloomFilterPolicy(10);
-
     init_blockindex(options); // Init directory
     pdb = txdb;
 
     if (Exists(string("version")))
     {
-        ReadVersion(nVersion);
+        if (!ReadVersion(nVersion)) {
+            Close();
+            throw runtime_error("Cannot read block-index version. No automatic rebuild was attempted; preserve the data directory for recovery.");
+        }
         printf("Transaction index version is %d\n", nVersion);
 
-        if (nVersion < DATABASE_VERSION)
+        if (nVersion != DATABASE_VERSION)
         {
-            printf("Required index version is %d, removing old database\n", DATABASE_VERSION);
-
-            // Leveldb instance destruction
-            delete txdb;
-            txdb = pdb = NULL;
-            delete activeBatch;
-            activeBatch = NULL;
-
-            init_blockindex(options, true); // Remove directory and create new database
-            pdb = txdb;
-
-            bool fTmp = fReadOnly;
-            fReadOnly = false;
-            WriteVersion(DATABASE_VERSION); // Save transaction index version
-            fReadOnly = fTmp;
+            Close();
+            throw runtime_error(strprintf(
+                "Block-index version %d is incompatible with required version %d. "
+                "No block files or index were deleted. Preserve the data directory and use a compatible binary or an explicitly planned migration.",
+                nVersion, DATABASE_VERSION));
         }
     }
     else if (fCreate)
     {
+        leveldb::Iterator* it = pdb->NewIterator(leveldb::ReadOptions());
+        it->SeekToFirst();
+        const bool empty = !it->Valid() && it->status().ok();
+        delete it;
+        if (!empty) {
+            Close();
+            throw runtime_error("Existing block index has no readable version. Refusing to relabel it; preserve the data directory for recovery.");
+        }
         bool fTmp = fReadOnly;
         fReadOnly = false;
-        WriteVersion(DATABASE_VERSION);
+        const bool written = WriteVersion(DATABASE_VERSION);
         fReadOnly = fTmp;
+        if (!written) {
+            Close();
+            throw runtime_error("Cannot write the new block-index version.");
+        }
     }
 
     printf("Opened LevelDB successfully\n");

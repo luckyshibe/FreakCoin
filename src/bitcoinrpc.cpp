@@ -10,6 +10,7 @@
 #include "base58.h"
 #include "bitcoinrpc.h"
 #include "db.h"
+#include "rpcaccess.h"
 
 #undef printf
 #include <boost/asio.hpp>
@@ -534,32 +535,9 @@ void ErrorReply(std::ostream& stream, const Object& objError, const Value& id)
 
 bool ClientAllowed(const boost::asio::ip::address& address)
 {
-    // Treat IPv4-mapped and legacy IPv4-compatible IPv6 addresses as IPv4.
-    if (address.is_v6())
-    {
-        const asio::ip::address_v6::bytes_type bytes = address.to_v6().to_bytes();
-
-        bool fV4Mapped = true;
-        for (int i = 0; i < 10; ++i)
-            if (bytes[i] != 0)
-                fV4Mapped = false;
-        fV4Mapped = fV4Mapped && bytes[10] == 0xff && bytes[11] == 0xff;
-
-        bool fV4Compatible = true;
-        for (int i = 0; i < 12; ++i)
-            if (bytes[i] != 0)
-                fV4Compatible = false;
-
-        if (fV4Mapped || fV4Compatible)
-        {
-            asio::ip::address_v4::bytes_type v4bytes;
-            v4bytes[0] = bytes[12];
-            v4bytes[1] = bytes[13];
-            v4bytes[2] = bytes[14];
-            v4bytes[3] = bytes[15];
-            return ClientAllowed(asio::ip::address_v4(v4bytes));
-        }
-    }
+    const asio::ip::address normalized = NormalizeRPCAddress(address);
+    if (normalized != address)
+        return ClientAllowed(normalized);
 
     if (address == asio::ip::address_v4::loopback()
      || address == asio::ip::address_v6::loopback()
@@ -776,7 +754,12 @@ void ThreadRPCServer2(void* parg)
         (mapArgs["-rpcuser"] == mapArgs["-rpcpassword"]))
     {
         unsigned char rand_pwd[32];
-        RAND_bytes(rand_pwd, 32);
+        if (RAND_bytes(rand_pwd, sizeof(rand_pwd)) != 1) {
+            uiInterface.ThreadSafeMessageBox(_("Unable to generate a secure RPC password."),
+                _("Error"), CClientUIInterface::OK | CClientUIInterface::MODAL);
+            StartShutdown();
+            return;
+        }
         string strWhatAmI = "To use FreakChaind";
         if (mapArgs.count("-server"))
             strWhatAmI = strprintf(_("To use the %s option"), "\"-server\"");
@@ -823,72 +806,54 @@ void ThreadRPCServer2(void* parg)
         SSL_CTX_set_cipher_list(context.native_handle(), strCiphers.c_str());
     }
 
-    // Try a dual IPv6/IPv4 socket, falling back to separate IPv4 and IPv6 sockets
-    const bool loopback = !mapArgs.count("-rpcallowip");
-    asio::ip::address bindAddress = loopback ? asio::ip::address_v6::loopback() : asio::ip::address_v6::any();
-    ip::tcp::endpoint endpoint(bindAddress, GetArg("-rpcport", GetDefaultRPCPort()));
-    boost::system::error_code v6_only_error;
-    boost::shared_ptr<ip::tcp::acceptor> acceptor(new ip::tcp::acceptor(io_service));
-
+    // An allowlist never widens the listening interfaces. Explicit bindings
+    // must all succeed; defaults tolerate a disabled IP family.
+    const vector<string>& requested = mapMultiArgs["-rpcbind"];
+    vector<ip::address> bindAddresses;
+    vector<boost::shared_ptr<ip::tcp::acceptor> > acceptors;
     boost::signals2::signal<void ()> StopRequests;
-
-    bool fListening = false;
     std::string strerr;
-    try
-    {
-        acceptor->open(endpoint.protocol());
-        acceptor->set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
-
-        // Try making the socket dual IPv6/IPv4 (if listening on the "any" address)
-        acceptor->set_option(boost::asio::ip::v6_only(loopback), v6_only_error);
-
-        acceptor->bind(endpoint);
-        acceptor->listen(socket_base::max_listen_connections);
-
-        RPCListen(acceptor, context, fUseSSL);
-        // Cancel outstanding listen-requests for this acceptor when shutting down
-        StopRequests.connect(signals2::slot<void ()>(
-                    static_cast<void (ip::tcp::acceptor::*)()>(&ip::tcp::acceptor::close), acceptor.get())
-                .track(acceptor));
-
-        fListening = true;
-    }
-    catch(boost::system::system_error &e)
-    {
-        strerr = strprintf(_("An error occurred while setting up the RPC port %u for listening on IPv6, falling back to IPv4: %s"), endpoint.port(), e.what());
-    }
-
-    try {
-        // If dual IPv6/IPv4 failed (or we're opening loopback interfaces only), open IPv4 separately
-        if (!fListening || loopback || v6_only_error)
-        {
-            bindAddress = loopback ? asio::ip::address_v4::loopback() : asio::ip::address_v4::any();
-            endpoint.address(bindAddress);
-
-            acceptor.reset(new ip::tcp::acceptor(io_service));
-            acceptor->open(endpoint.protocol());
-            acceptor->set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
-            acceptor->bind(endpoint);
-            acceptor->listen(socket_base::max_listen_connections);
-
-            RPCListen(acceptor, context, fUseSSL);
-            // Cancel outstanding listen-requests for this acceptor when shutting down
-            StopRequests.connect(signals2::slot<void ()>(
-                        static_cast<void (ip::tcp::acceptor::*)()>(&ip::tcp::acceptor::close), acceptor.get())
-                    .track(acceptor));
-
-            fListening = true;
-        }
-    }
-    catch(boost::system::system_error &e)
-    {
-        strerr = strprintf(_("An error occurred while setting up the RPC port %u for listening on IPv4: %s"), endpoint.port(), e.what());
-    }
-
-    if (!fListening) {
+    const int64_t rpcPort = GetArg("-rpcport", GetDefaultRPCPort());
+    if (!RPCBindAddresses(requested, bindAddresses, strerr) || rpcPort < 1 || rpcPort > 65535) {
+        if (strerr.empty())
+            strerr = "Invalid -rpcport: expected a port between 1 and 65535.";
         uiInterface.ThreadSafeMessageBox(strerr, _("Error"), CClientUIInterface::OK | CClientUIInterface::MODAL);
         StartShutdown();
         return;
+    }
+    BOOST_FOREACH(const ip::address& bindAddress, bindAddresses) {
+        ip::tcp::endpoint endpoint(bindAddress, static_cast<unsigned short>(rpcPort));
+        try {
+            boost::shared_ptr<ip::tcp::acceptor> acceptor(new ip::tcp::acceptor(io_service));
+            acceptor->open(endpoint.protocol());
+            acceptor->set_option(ip::tcp::acceptor::reuse_address(true));
+            if (bindAddress.is_v6())
+                acceptor->set_option(ip::v6_only(true));
+            acceptor->bind(endpoint);
+            acceptor->listen(socket_base::max_listen_connections);
+            acceptors.push_back(acceptor);
+            printf("RPC listening on %s port %u\n", bindAddress.to_string().c_str(), endpoint.port());
+        } catch (const boost::system::system_error& e) {
+            strerr = strprintf("Unable to bind RPC to %s port %u: %s",
+                               bindAddress.to_string().c_str(), endpoint.port(), e.what());
+            if (!requested.empty()) {
+                uiInterface.ThreadSafeMessageBox(strerr, _("Error"), CClientUIInterface::OK | CClientUIInterface::MODAL);
+                StartShutdown();
+                return;
+            }
+            printf("%s\n", strerr.c_str());
+        }
+    }
+    if (acceptors.empty()) {
+        uiInterface.ThreadSafeMessageBox(strerr, _("Error"), CClientUIInterface::OK | CClientUIInterface::MODAL);
+        StartShutdown();
+        return;
+    }
+    BOOST_FOREACH(boost::shared_ptr<ip::tcp::acceptor> acceptor, acceptors) {
+        RPCListen(acceptor, context, fUseSSL);
+        StopRequests.connect(signals2::slot<void ()>(
+                    static_cast<void (ip::tcp::acceptor::*)()>(&ip::tcp::acceptor::close), acceptor.get())
+                .track(acceptor));
     }
 
     vnThreadsRunning[THREAD_RPCLISTENER]--;

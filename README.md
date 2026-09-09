@@ -2,6 +2,10 @@
 
 ### FreakChain 
 
+Current stabilization work is on `network-bootstrap`. See
+[build and test instructions](doc/stabilization-testing.md) before replacing a
+working daemon. The inherited testing/platform notes below are not all current.
+
 <img src="https://i.imgur.com/a7dzshC.png">
 
 ## Important Links
@@ -23,8 +27,8 @@ Ticker: FREAK
 Maturity: 6 Blocks
 POW Algo: Scrypt
 POS: 5% APR
-Port: 15555
-Rpcport: 16555  
+Port: 16555
+Rpcport: 16556 (local RPC only)
 Max Supply: 1 Billion
 POW Block Reward: 300 FREAK
 POW Last Block: 1 million

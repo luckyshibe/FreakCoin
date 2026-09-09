@@ -61,6 +61,7 @@ CMedianFilter<int> cPeerBlockCounts(5, 0); // Amount of blocks that other nodes 
 map<uint256, CBlock*> mapOrphanBlocks;
 multimap<uint256, CBlock*> mapOrphanBlocksByPrev;
 set<pair<COutPoint, unsigned int> > setStakeSeenOrphan;
+static uint64_t nOrphanBlockBytes = 0;
 
 map<uint256, CTransaction> mapOrphanTransactions;
 map<uint256, set<uint256> > mapOrphanTransactionsByPrev;
@@ -2224,6 +2225,65 @@ bool CBlockIndex::IsSuperMajority(int minVersion, const CBlockIndex* pstart, uns
     return (nFound >= nRequired);
 }
 
+bool AddOrphanBlock(const CBlock& block)
+{
+    AssertLockHeld(cs_main);
+    const uint256 hash = block.GetHash();
+    if (mapOrphanBlocks.count(hash))
+        return false;
+    CBlock* copy = new CBlock(block);
+    mapOrphanBlocks.insert(make_pair(hash, copy));
+    mapOrphanBlocksByPrev.insert(make_pair(copy->hashPrevBlock, copy));
+    nOrphanBlockBytes += ::GetSerializeSize(*copy, SER_NETWORK, PROTOCOL_VERSION);
+    if (copy->IsProofOfStake())
+        setStakeSeenOrphan.insert(copy->GetProofOfStake());
+    return true;
+}
+
+void EraseOrphanBlock(const uint256& hash)
+{
+    AssertLockHeld(cs_main);
+    map<uint256, CBlock*>::iterator found = mapOrphanBlocks.find(hash);
+    if (found == mapOrphanBlocks.end())
+        return;
+    CBlock* block = found->second;
+    for (multimap<uint256, CBlock*>::iterator it = mapOrphanBlocksByPrev.lower_bound(block->hashPrevBlock);
+         it != mapOrphanBlocksByPrev.upper_bound(block->hashPrevBlock); ++it) {
+        if (it->second == block) {
+            mapOrphanBlocksByPrev.erase(it);
+            break;
+        }
+    }
+    nOrphanBlockBytes -= ::GetSerializeSize(*block, SER_NETWORK, PROTOCOL_VERSION);
+    mapOrphanBlocks.erase(found);
+    if (block->IsProofOfStake()) {
+        const pair<COutPoint, unsigned int> stake = block->GetProofOfStake();
+        bool stillSeen = false;
+        BOOST_FOREACH(const PAIRTYPE(uint256, CBlock*)& item, mapOrphanBlocks)
+            if (item.second->IsProofOfStake() && item.second->GetProofOfStake() == stake)
+                stillSeen = true;
+        if (!stillSeen)
+            setStakeSeenOrphan.erase(stake);
+    }
+    delete block;
+}
+
+unsigned int LimitOrphanBlocks(unsigned int maxCount, uint64_t maxBytes)
+{
+    AssertLockHeld(cs_main);
+    unsigned int removed = 0;
+    while (!mapOrphanBlocks.empty() &&
+           (mapOrphanBlocks.size() > maxCount || nOrphanBlockBytes > maxBytes)) {
+        // Evict a leaf so a retained child never loses its cached parent.
+        CBlock* leaf = mapOrphanBlocks.begin()->second;
+        while (mapOrphanBlocksByPrev.count(leaf->GetHash()))
+            leaf = mapOrphanBlocksByPrev.find(leaf->GetHash())->second;
+        EraseOrphanBlock(leaf->GetHash());
+        ++removed;
+    }
+    return removed;
+}
+
 bool ProcessBlock(CNode* pfrom, CBlock* pblock)
 {
     AssertLockHeld(cs_main);
@@ -2282,22 +2342,21 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
             // Duplicate stake allowed only when there is orphan child block
             if (setStakeSeenOrphan.count(pblock->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash) && !Checkpoints::WantedByPendingSyncCheckpoint(hash))
                 return error("ProcessBlock() : duplicate proof-of-stake (%s, %d) for orphan block %s", pblock->GetProofOfStake().first.ToString().c_str(), pblock->GetProofOfStake().second, hash.ToString().c_str());
-            else
-                setStakeSeenOrphan.insert(pblock->GetProofOfStake());
         }
-        CBlock* pblock2 = new CBlock(*pblock);
-        mapOrphanBlocks.insert(make_pair(hash, pblock2));
-        mapOrphanBlocksByPrev.insert(make_pair(pblock2->hashPrevBlock, pblock2));
+        AddOrphanBlock(*pblock);
 
         // Ask this guy to fill in what we're missing
         if (pfrom)
         {
-            pfrom->PushGetBlocks(pindexBest, GetOrphanRoot(pblock2));
+            pfrom->PushGetBlocks(pindexBest, GetOrphanRoot(pblock));
             // ppcoin: getblocks may not obtain the ancestor block rejected
             // earlier by duplicate-stake check so we ask for it again directly
             if (!IsInitialBlockDownload())
-                pfrom->AskFor(CInv(MSG_BLOCK, WantedByOrphan(pblock2)));
+                pfrom->AskFor(CInv(MSG_BLOCK, WantedByOrphan(pblock)));
         }
+        const unsigned int evicted = LimitOrphanBlocks();
+        if (evicted)
+            printf("Orphan block cache: evicted %u blocks to enforce resource limits\n", evicted);
         return true;
     }
 
@@ -2313,14 +2372,13 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         uint256 hashPrev = vWorkQueue[i];
         for (multimap<uint256, CBlock*>::iterator mi = mapOrphanBlocksByPrev.lower_bound(hashPrev);
              mi != mapOrphanBlocksByPrev.upper_bound(hashPrev);
-             ++mi)
+             )
         {
             CBlock* pblockOrphan = (*mi).second;
+            ++mi;
             if (pblockOrphan->AcceptBlock())
                 vWorkQueue.push_back(pblockOrphan->GetHash());
-            mapOrphanBlocks.erase(pblockOrphan->GetHash());
-            setStakeSeenOrphan.erase(pblockOrphan->GetProofOfStake());
-            delete pblockOrphan;
+            EraseOrphanBlock(pblockOrphan->GetHash());
         }
         mapOrphanBlocksByPrev.erase(hashPrev);
     }

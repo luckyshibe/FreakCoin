@@ -87,6 +87,11 @@ extern std::set<CWallet*> setpwalletRegistered;
 extern unsigned char pchMessageStart[4];
 extern std::map<uint256, CBlock*> mapOrphanBlocks;
 
+// Local cache policy, not block-validity rules. Call with cs_main held.
+bool AddOrphanBlock(const CBlock& block);
+void EraseOrphanBlock(const uint256& hash);
+unsigned int LimitOrphanBlocks(unsigned int maxCount = 750, uint64_t maxBytes = 64 * 1024 * 1024);
+
 // Settings
 extern int64_t nTransactionFee;
 extern int64_t nReserveBalance;

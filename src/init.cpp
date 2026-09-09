@@ -16,6 +16,7 @@
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 #include <openssl/crypto.h>
+#include <climits>
 
 #ifndef WIN32
 #include <signal.h>
@@ -283,8 +284,9 @@ std::string HelpMessage()
 #endif
         "  -rpcuser=<user>        " + _("Username for JSON-RPC connections") + "\n" +
         "  -rpcpassword=<pw>      " + _("Password for JSON-RPC connections") + "\n" +
-        "  -rpcport=<port>        " + _("Listen for JSON-RPC connections on <port> (default: 13157 or testnet: 15357)") + "\n" +
-        "  -rpcallowip=<ip>       " + _("Allow JSON-RPC connections from specified IP address") + "\n" +
+        "  -rpcport=<port>        " + _("Listen for JSON-RPC connections on <port> (default: 16556 or testnet: 15556)") + "\n" +
+        "  -rpcbind=<ip>          " + _("Bind RPC to a numeric IP address; repeat for multiple addresses (default: IPv4/IPv6 loopback)") + "\n" +
+        "  -rpcallowip=<ip>       " + _("Allow JSON-RPC connections from specified IP address; does not change listening interfaces") + "\n" +
         "  -rpcconnect=<ip>       " + _("Send commands to node running on <ip> (default: 127.0.0.1)") + "\n" +
         "  -blocknotify=<cmd>     " + _("Execute command when the best block changes (%s in cmd is replaced by block hash)") + "\n" +
         "  -walletnotify=<cmd>    " + _("Execute command when a wallet transaction changes (%s in cmd is replaced by TxID)") + "\n" +
@@ -433,6 +435,18 @@ bool AppInit2()
     }
 
     // ********************************************************* Step 3: parameter-to-internal-flags
+
+    if (GetBoolArg("-regtest", false))
+        return InitError("Regression-test mode is not implemented. Use the isolated offline test suite; -regtest cannot isolate this daemon.");
+    if (fTestNet && hashGenesisBlockTestNet == 0)
+        return InitError("Testnet has no configured genesis block in this build. Mainnet data was not loaded.");
+    if (GetBoolArg("-zerotest", false))
+        return InitError("Zerocoin self-test parameters are not initialized in this build.");
+    const int64_t maxConnections = GetArg("-maxconnections", 125);
+    if (maxConnections < 1 || maxConnections > INT_MAX)
+        return InitError("Invalid -maxconnections: expected a positive integer within the supported range.");
+    if (GetBoolArg("-listen", true) && maxConnections <= 16)
+        return InitError("-maxconnections must exceed 16 when P2P listening is enabled (16 outbound slots are reserved). Use -listen=0 for an outbound-only wallet, or increase -maxconnections.");
 
     fDebug = GetBoolArg("-debug");
 

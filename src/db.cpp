@@ -63,6 +63,11 @@ bool CDBEnv::Open(boost::filesystem::path pathEnv_)
     if (fDbEnvInit)
         return true;
 
+    int major = 0, minor = 0, patch = 0;
+    DbEnv::version(&major, &minor, &patch);
+    if (major != 4 || minor != 8)
+        return error("Wallet compatibility requires Berkeley DB 4.8; linked library is %d.%d.%d", major, minor, patch);
+
     if (fShutdown)
         return false;
 
@@ -357,22 +362,25 @@ bool CDB::Rewrite(const string& strFile, const char* pszSkip)
                 string strFileRes = strFile + ".rewrite";
                 { // surround usage of db with extra {}
                     CDB db(strFile.c_str(), "r");
-                    Db* pdbCopy = new Db(&bitdb.dbenv, 0);
+                    Db copy(&bitdb.dbenv, DB_CXX_NO_EXCEPTIONS);
 
-                    int ret = pdbCopy->open(NULL,                 // Txn pointer
+                    int ret = copy.open(NULL,                 // Txn pointer
                                             strFileRes.c_str(),   // Filename
                                             "main",    // Logical db name
                                             DB_BTREE,  // Database type
-                                            DB_CREATE,    // Flags
-                                            0);
-                    if (ret > 0)
+                                            DB_CREATE | DB_EXCL,    // Preserve any previous rewrite
+                                            S_IRUSR | S_IWUSR);
+                    if (ret != 0)
                     {
                         printf("Cannot create database file %s\n", strFileRes.c_str());
                         fSuccess = false;
                     }
 
-                    Dbc* pcursor = db.GetCursor();
-                    if (pcursor)
+                    const bool copyOpened = ret == 0;
+                    Dbc* pcursor = fSuccess ? db.GetCursor() : NULL;
+                    if (!pcursor)
+                        fSuccess = false;
+                    else
                         while (fSuccess)
                         {
                             CDataStream ssKey(SER_DISK, CLIENT_VERSION);
@@ -380,19 +388,17 @@ bool CDB::Rewrite(const string& strFile, const char* pszSkip)
                             int ret = db.ReadAtCursor(pcursor, ssKey, ssValue, DB_NEXT);
                             if (ret == DB_NOTFOUND)
                             {
-                                pcursor->close();
                                 break;
                             }
                             else if (ret != 0)
                             {
-                                pcursor->close();
                                 fSuccess = false;
                                 break;
                             }
-                            if (pszSkip &&
-                                strncmp(&ssKey[0], pszSkip, std::min(ssKey.size(), strlen(pszSkip))) == 0)
+                            if (pszSkip && ssKey.size() >= strlen(pszSkip) &&
+                                memcmp(&ssKey[0], pszSkip, strlen(pszSkip)) == 0)
                                 continue;
-                            if (strncmp(&ssKey[0], "\x07version", 8) == 0)
+                            if (ssKey.size() >= 8 && memcmp(&ssKey[0], "\x07version", 8) == 0)
                             {
                                 // Update version:
                                 ssValue.clear();
@@ -400,30 +406,38 @@ bool CDB::Rewrite(const string& strFile, const char* pszSkip)
                             }
                             Dbt datKey(&ssKey[0], ssKey.size());
                             Dbt datValue(&ssValue[0], ssValue.size());
-                            int ret2 = pdbCopy->put(NULL, &datKey, &datValue, DB_NOOVERWRITE);
-                            if (ret2 > 0)
+                            int ret2 = copy.put(NULL, &datKey, &datValue, DB_NOOVERWRITE);
+                            if (ret2 != 0)
                                 fSuccess = false;
                         }
-                    if (fSuccess)
-                    {
-                        db.Close();
-                        bitdb.CloseDb(strFile);
-                        if (pdbCopy->close(0))
+                    if (pcursor && pcursor->close() != 0)
+                        fSuccess = false;
+                    if (copyOpened) {
+                        if (fSuccess && copy.sync(0) != 0)
                             fSuccess = false;
-                        delete pdbCopy;
+                        if (copy.close(0) != 0)
+                            fSuccess = false;
                     }
+                    db.Close();
+                    bitdb.CloseDb(strFile);
                 }
                 if (fSuccess)
                 {
-                    Db dbA(&bitdb.dbenv, 0);
-                    if (dbA.remove(strFile.c_str(), NULL, 0))
+                    // Both names change in one durable BDB transaction. An
+                    // error or interrupted replacement can recover the original.
+                    DbTxn* txn = bitdb.TxnBegin(DB_TXN_SYNC);
+                    if (!txn)
                         fSuccess = false;
-                    Db dbB(&bitdb.dbenv, 0);
-                    if (dbB.rename(strFileRes.c_str(), NULL, strFile.c_str(), 0))
+                    else if (bitdb.dbenv.dbremove(txn, strFile.c_str(), NULL, 0) != 0 ||
+                             bitdb.dbenv.dbrename(txn, strFileRes.c_str(), NULL, strFile.c_str(), 0) != 0) {
+                        txn->abort();
                         fSuccess = false;
+                    } else {
+                        fSuccess = txn->commit(DB_TXN_SYNC) == 0;
+                    }
                 }
                 if (!fSuccess)
-                    printf("Rewriting of %s FAILED!\n", strFileRes.c_str());
+                    printf("Rewriting of %s FAILED. Preserve the wallet, rewrite file, and database logs for recovery.\n", strFileRes.c_str());
                 return fSuccess;
             }
         }
@@ -578,4 +592,3 @@ bool CAddrDB::Read(CAddrMan& addr)
 
     return true;
 }
-

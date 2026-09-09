@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include "util.h"
+#include "secureconfig.h"
 #include "sync.h"
 #include "strlcpy.h"
 #include "version.h"
@@ -505,7 +506,7 @@ void ParseParameters(int argc, const char* const argv[])
     for (int i = 1; i < argc; i++)
     {
         char psz[10000];
-        strlcpy(psz, argv[i], sizeof(psz));
+        freakchain::strlcpy(psz, argv[i], sizeof(psz));
         char* pszValue = (char*)"";
         if (strchr(psz, '='))
         {
@@ -1046,35 +1047,6 @@ const boost::filesystem::path &GetDataDir(bool fNetSpecific)
     return path;
 }
 
-string randomStrGen(int length) {
-    static string charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
-    string result;
-    result.resize(length);
-    for (int32_t i = 0; i < length; i++)
-        result[i] = charset[rand() % charset.length()];
-
-    return result;
-}
-
-void createConf()
-{
-    srand(static_cast<unsigned int>(time(NULL)));
-
-    ofstream pConf;
-#if BOOST_FILESYSTEM_VERSION >= 3
-    pConf.open(GetConfigFile().generic_string().c_str());
-#else
-    pConf.open(GetConfigFile().string().c_str());
-#endif
-    pConf << "rpcuser=user"
-            + randomStrGen(15)
-            + "\nrpcpassword="
-            + randomStrGen(15)
-            + "\n#(0=off, 1=on) staking - turn staking on or off"
-            + "\nstaking=1";
-    pConf.close();
-}
-
 boost::filesystem::path GetConfigFile()
 {
     boost::filesystem::path pathConfigFile(GetArg("-conf", "FreakChain.conf"));
@@ -1088,11 +1060,19 @@ void ReadConfigFile(map<string, string>& mapSettingsRet,
     boost::filesystem::ifstream streamConfig(GetConfigFile());
     if (!streamConfig.good())
     {
-        createConf();
-        new(&streamConfig) boost::filesystem::ifstream(GetConfigFile());
-        if(!streamConfig.good())
-            return;
-	}
+        boost::system::error_code ec;
+        const bool exists = boost::filesystem::exists(GetConfigFile(), ec);
+        if (ec || exists)
+            throw runtime_error("Cannot read existing configuration: " + GetConfigFile().string());
+        string error;
+        if (!CreateRPCConfig(GetConfigFile().string(), error))
+            throw runtime_error(error + " Path: " + GetConfigFile().string());
+        streamConfig.close();
+        streamConfig.clear();
+        streamConfig.open(GetConfigFile());
+        if (!streamConfig.good())
+            throw runtime_error("Cannot read newly created configuration: " + GetConfigFile().string());
+    }
 	
     set<string> setOptions;
     setOptions.insert("*");

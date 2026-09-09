@@ -11,19 +11,19 @@ else
     exit 1
 fi
 
-if [ -e "$(which git)" ]; then
-    # clean 'dirty' status of touched files that haven't been modified
-    git diff >/dev/null 2>/dev/null 
-
-    # get a string like "v0.6.0-66-g59887e8-dirty"
-    DESC="$(git describe --dirty 2>/dev/null)"
+if command -v git >/dev/null 2>&1; then
+    # A commit is available even in a clone without release tags.
+    COMMIT="$(git rev-parse --verify HEAD 2>/dev/null)"
+    if [ -n "$COMMIT" ] && ! git diff-index --quiet HEAD --; then
+        COMMIT="$COMMIT-dirty"
+    fi
 
     # get a string like "2012-04-10 16:27:19 +0200"
     TIME="$(git log -n 1 --format="%ci")"
 fi
 
-if [ -n "$DESC" ]; then
-    NEWINFO="#define BUILD_DESC \"$DESC\""
+if [ -n "$COMMIT" ]; then
+    NEWINFO="#define BUILD_COMMIT \"$COMMIT\""
 else
     NEWINFO="// No build information available"
 fi

@@ -13,6 +13,10 @@
 
 #include <db_cxx.h>
 
+#if DB_VERSION_MAJOR != 4 || DB_VERSION_MINOR != 8
+#error FreakChain wallet compatibility requires Berkeley DB 4.8 headers and libraries.
+#endif
+
 class CAddress;
 class CAddrMan;
 class CBlockLocator;
@@ -276,11 +280,11 @@ public:
         return true;
     }
 
-    bool TxnCommit()
+    bool TxnCommit(unsigned int flags = 0)
     {
         if (!pdb || !activeTxn)
             return false;
-        int ret = activeTxn->commit(0);
+        int ret = activeTxn->commit(flags);
         activeTxn = NULL;
         return (ret == 0);
     }

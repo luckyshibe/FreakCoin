@@ -140,7 +140,12 @@ int main(int argc, char *argv[])
                               QString("Error: Specified data directory \"%1\" does not exist.").arg(QString::fromStdString(mapArgs["-datadir"])));
         return 1;
     }
-    ReadConfigFile(mapArgs, mapMultiArgs);
+    try {
+        ReadConfigFile(mapArgs, mapMultiArgs);
+    } catch (const std::exception& e) {
+        QMessageBox::critical(0, "FreakChain", QString::fromLocal8Bit(e.what()));
+        return 1;
+    }
 
     // Application identification (must be set before OptionsModel is initialized,
     // as it is used to locate QSettings)

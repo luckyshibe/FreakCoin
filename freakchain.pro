@@ -159,6 +159,8 @@ HEADERS += src/qt/bitcoingui.h \
     src/coincontrol.h \
     src/sync.h \
     src/util.h \
+    src/secureconfig.h \
+    src/rpcaccess.h \
     src/uint256.h \
     src/kernel.h \
     src/scrypt.h \
@@ -246,6 +248,7 @@ SOURCES += src/qt/bitcoin.cpp src/qt/bitcoingui.cpp \
     src/version.cpp \
     src/sync.cpp \
     src/util.cpp \
+    src/secureconfig.cpp \
     src/netbase.cpp \
     src/key.cpp \
     src/script.cpp \
@@ -411,7 +414,8 @@ macx:QMAKE_CXXFLAGS_THREAD += -pthread
 # Set libraries and includes at end, to use platform-defined defaults if not overridden
 INCLUDEPATH += $$BOOST_INCLUDE_PATH $$BDB_INCLUDE_PATH $$OPENSSL_INCLUDE_PATH $$QRENCODE_INCLUDE_PATH
 LIBS += $$join(BOOST_LIB_PATH,,-L,) $$join(BDB_LIB_PATH,,-L,) $$join(OPENSSL_LIB_PATH,,-L,) $$join(QRENCODE_LIB_PATH,,-L,)
-LIBS += -lssl -lcrypto -lcrypt32 -ldb_cxx$$BDB_LIB_SUFFIX
+LIBS += -lssl -lcrypto -ldb_cxx$$BDB_LIB_SUFFIX
+windows:LIBS += -lcrypt32 -ladvapi32
 # -lgdi32 has to happen after -lcrypto (see  #681)
 windows:LIBS += -lws2_32 -lshlwapi -lmswsock -lole32 -loleaut32 -luuid -lgdi32 -lpthread
 LIBS += -lboost_filesystem$$BOOST_LIB_SUFFIX -lboost_program_options$$BOOST_LIB_SUFFIX -lboost_thread$$BOOST_THREAD_LIB_SUFFIX

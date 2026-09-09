@@ -1370,6 +1370,9 @@ void ThreadOpenConnections(void* parg)
 
 void static ProcessOneShot()
 {
+    CSemaphoreGrant grant(*semOutbound, true);
+    if (!grant)
+        return; // Keep queued destinations until an outbound slot is available.
     string strDest;
     {
         LOCK(cs_vOneShots);
@@ -1379,11 +1382,8 @@ void static ProcessOneShot()
         vOneShots.pop_front();
     }
     CAddress addr;
-    CSemaphoreGrant grant(*semOutbound, true);
-    if (grant) {
-        if (!OpenNetworkConnection(addr, &grant, strDest.c_str(), true))
-            AddOneShot(strDest);
-    }
+    if (!OpenNetworkConnection(addr, &grant, strDest.c_str(), true))
+        AddOneShot(strDest);
 }
 
 void static ThreadStakeMiner(void* parg)
