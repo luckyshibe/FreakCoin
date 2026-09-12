@@ -97,18 +97,7 @@ private:
     QAction* openInfoAction;
     QAction* openRPCConsoleAction;
     
-    QAction *twitterAction;
     QAction *discordAction;
-    QAction *telegramAction;
-    QAction *youtubeAction;
-    QAction *redditAction;
-    
-    QAction *websiteAction;
-    QAction *blockexplorerAction;
-    QAction *paperwalletAction;
-    QAction *githubsourceAction;
-    QAction *whitepaperAction;
-    QAction *roadmapAction;
 
     QSystemTrayIcon *trayIcon;
     Notificator *notificator;
@@ -179,19 +168,7 @@ private slots:
 #endif
 
     /** Social Channels */
-    void twitterActionClicked();
     void discordActionClicked();
-    void telegramActionClicked();
-    void youtubeActionClicked();
-    void redditActionClicked();
-    
-    /** Links Menu */
-    void websiteActionClicked();
-    void blockexplorerActionClicked();
-    void paperwalletActionClicked();
-    void githubsourceActionClicked();
-    void whitepaperActionClicked();
-    void roadmapActionClicked();
 
     /** Show incoming transaction notification for new transactions.
 
