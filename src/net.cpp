@@ -9,6 +9,13 @@
 #include "strlcpy.h"
 #include "addrman.h"
 #include "ui_interface.h"
+#include <fstream>
+#include <sstream>
+#include <fcntl.h>
+#include <sys/stat.h>
+#ifdef WIN32
+#include <io.h>
+#endif
 
 #ifdef WIN32
 #include <string.h>
@@ -61,6 +68,160 @@ CAddrMan addrman;
 
 vector<CNode*> vNodes;
 CCriticalSection cs_vNodes;
+
+// Manual bans are independent of automatic misbehavior scores. Only explicit
+// operator actions persist them; a remote peer cannot cause disk writes here.
+static CCriticalSection cs_manualBans;
+static std::map<CNetAddr, int64_t> manualBans;
+static const size_t MAX_MANUAL_BANS = 4096;
+
+bool ParseBanAddress(const std::string& value, CNetAddr& address)
+{
+    // Numeric IP only: no DNS, ports, ranges, or wildcard interpretation.
+    std::vector<CNetAddr> addresses;
+    if (value.empty() || value.find_first_of("[]/ \t\r\n") != std::string::npos ||
+        !LookupHost(value.c_str(), addresses, 1, false) || addresses.empty())
+        return false;
+    address = addresses.front();
+    return address.IsValid() && !address.IsMulticast() &&
+           (address.IsIPv4() || address.IsIPv6());
+}
+
+static bool WriteManualBans(const std::map<CNetAddr, int64_t>& bans, std::string& message)
+{
+    std::ostringstream data;
+    data << "FreakChain manual bans v1\n";
+    for (const auto& ban : bans)
+        data << ban.second << ' ' << ban.first.ToStringIP() << '\n';
+    const std::string bytes = data.str();
+    unsigned char random[8];
+    if (RAND_bytes(random, sizeof(random)) != 1) {
+        message = "Cannot generate temporary ban-file name";
+        return false;
+    }
+    const boost::filesystem::path path = GetDataDir() / "manual-peer-bans.dat";
+    const boost::filesystem::path temporary = GetDataDir() / ("manual-peer-bans." + HexStr(random, random + sizeof(random)) + ".tmp");
+#ifdef WIN32
+    int fd = _open(temporary.string().c_str(), _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY, _S_IREAD | _S_IWRITE);
+    FILE* file = fd < 0 ? NULL : _fdopen(fd, "wb");
+#else
+    int fd = open(temporary.string().c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
+    FILE* file = fd < 0 ? NULL : fdopen(fd, "wb");
+#endif
+    if (!file) {
+        if (fd >= 0) {
+#ifdef WIN32
+            _close(fd);
+#else
+            close(fd);
+#endif
+            std::remove(temporary.string().c_str());
+        }
+        message = "Cannot create temporary manual-ban file";
+        return false;
+    }
+    bool ok = fwrite(bytes.data(), 1, bytes.size(), file) == bytes.size() && fflush(file) == 0;
+#ifdef WIN32
+    if (ok) ok = _commit(_fileno(file)) == 0;
+#else
+    if (ok) ok = fsync(fileno(file)) == 0;
+#endif
+    if (fclose(file) != 0) ok = false;
+    if (ok) ok = RenameOver(temporary, path);
+    if (!ok) {
+        std::remove(temporary.string().c_str());
+        message = "Cannot save manual peer bans; previous bans remain in effect";
+    }
+    return ok;
+}
+
+bool LoadManualBans(std::string& message)
+{
+    LOCK(cs_manualBans);
+    std::map<CNetAddr, int64_t> loaded;
+    const boost::filesystem::path path = GetDataDir() / "manual-peer-bans.dat";
+    try {
+        if (!boost::filesystem::exists(path)) {
+            manualBans.clear();
+            return true;
+        }
+        if (boost::filesystem::file_size(path) > 1024 * 1024)
+            throw std::runtime_error("file exceeds 1 MiB");
+        std::ifstream input(path.string().c_str(), std::ios::binary);
+        std::string line;
+        if (!std::getline(input, line) || line != "FreakChain manual bans v1")
+            throw std::runtime_error("invalid header or unreadable file");
+        size_t count = 0;
+        while (std::getline(input, line)) {
+            std::istringstream record(line);
+            std::string ip, extra;
+            int64_t until = 0;
+            CNetAddr address;
+            if (++count > MAX_MANUAL_BANS || !(record >> until >> ip) || (record >> extra) ||
+                until <= 0 || !ParseBanAddress(ip, address) || loaded.count(address))
+                throw std::runtime_error("invalid ban record");
+            loaded[address] = until;
+        }
+        if (input.bad()) throw std::runtime_error("read failed");
+    } catch (const std::exception& e) {
+        message = std::string("Cannot load manual-peer-bans.dat: ") + e.what() + ". Preserve the file and repair it before starting peer connections.";
+        return false;
+    }
+    manualBans.swap(loaded);
+    return true;
+}
+
+bool IsManuallyBanned(const CNetAddr& address)
+{
+    LOCK(cs_manualBans);
+    const auto ban = manualBans.find(address);
+    return ban != manualBans.end() && ban->second > GetTime();
+}
+
+std::map<CNetAddr, int64_t> GetManualBans()
+{
+    LOCK(cs_manualBans);
+    std::map<CNetAddr, int64_t> active;
+    for (const auto& ban : manualBans)
+        if (ban.second > GetTime()) active.insert(ban);
+    return active;
+}
+
+bool UpdateManualBan(const CNetAddr& address, int64_t until, std::string& message)
+{
+    {
+        LOCK(cs_manualBans);
+        auto updated = GetManualBans();
+        if (until == 0) {
+            if (!updated.erase(address)) {
+                message = "IP is not manually banned";
+                return false;
+            }
+        } else {
+            if (until <= GetTime() || (!updated.count(address) && updated.size() >= MAX_MANUAL_BANS)) {
+                message = "Invalid ban expiry or manual ban list is full";
+                return false;
+            }
+            updated[address] = until;
+        }
+        if (!WriteManualBans(updated, message)) return false;
+        manualBans.swap(updated);
+    }
+    // Keep lock order consistent with connection admission: nodes before bans.
+    LOCK(cs_vNodes);
+    for (CNode* node : vNodes)
+        if (IsManuallyBanned(node->addr)) node->fDisconnect = true;
+    return true;
+}
+
+bool ClearManualBans(std::string& message)
+{
+    LOCK(cs_manualBans);
+    const std::map<CNetAddr, int64_t> empty;
+    if (!WriteManualBans(empty, message)) return false;
+    manualBans.clear();
+    return true;
+}
 
 vector<string> vAddedNodes;
 CCriticalSection cs_vAddedNodes;
@@ -469,6 +630,10 @@ CNode* FindNode(const CService& addr)
 
 CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
 {
+    CService numeric;
+    if ((!pszDest && CNode::IsBanned(addrConnect)) ||
+        (pszDest && LookupNumeric(pszDest, numeric, GetDefaultPort()) && CNode::IsBanned(numeric)))
+        return NULL;
     if (pszDest == NULL) {
         if (IsLocal(addrConnect))
             return NULL;
@@ -492,6 +657,13 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
     SOCKET hSocket;
     if (pszDest ? ConnectSocketByName(addrConnect, hSocket, pszDest, GetDefaultPort()) : ConnectSocket(addrConnect, hSocket))
     {
+        // Also check the resolved IP for named addnode/connect/seednode targets.
+        if (CNode::IsBanned(addrConnect) || (!addrConnect.IsValid() && !GetManualBans().empty())) {
+            // A proxy-resolved name may hide its destination IP. With manual
+            // IP restrictions enabled, require a destination we can check.
+            closesocket(hSocket);
+            return NULL;
+        }
         addrman.Attempt(addrConnect);
 
         /// debug print
@@ -513,6 +685,7 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
 
         {
             LOCK(cs_vNodes);
+            if (CNode::IsBanned(addrConnect)) pnode->fDisconnect = true;
             vNodes.push_back(pnode);
         }
 
@@ -578,7 +751,7 @@ bool CNode::IsBanned(CNetAddr ip)
                 fResult = true;
         }
     }
-    return fResult;
+    return fResult || IsManuallyBanned(ip);
 }
 
 bool CNode::Misbehaving(int howmuch)
@@ -956,6 +1129,7 @@ void ThreadSocketHandler2(void* parg)
                 pnode->AddRef();
                 {
                     LOCK(cs_vNodes);
+                    if (CNode::IsBanned(addr)) pnode->fDisconnect = true;
                     vNodes.push_back(pnode);
                 }
             }

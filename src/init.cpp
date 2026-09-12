@@ -256,6 +256,7 @@ std::string HelpMessage()
         "  -cppolicy              " + _("Sync checkpoints policy (default: strict)") + "\n" +
         "  -banscore=<n>          " + _("Threshold for disconnecting misbehaving peers (default: 100)") + "\n" +
         "  -bantime=<n>           " + _("Number of seconds to keep misbehaving peers from reconnecting (default: 86400)") + "\n" +
+        "  -localcheckpoint=<height>:<hash> " + _("Locally reject histories conflicting at this block (default: disabled; not broadcast to peers)") + "\n" +
         "  -maxreceivebuffer=<n>  " + _("Maximum per-connection receive buffer, <n>*1000 bytes (default: 5000)") + "\n" +
         "  -maxsendbuffer=<n>     " + _("Maximum per-connection send buffer, <n>*1000 bytes (default: 1000)") + "\n" +
 #ifdef USE_UPNP
@@ -386,6 +387,12 @@ bool AppInit2()
     nMinerSleep = GetArg("-minersleep", 500);
 
     CheckpointsMode = Checkpoints::STRICT;
+    std::string localCheckpointError;
+    if ((mapArgs.count("-localcheckpoint") && GetArg("-localcheckpoint", "").empty()) ||
+        mapMultiArgs["-localcheckpoint"].size() > 1)
+        return InitError("Specify exactly one non-empty -localcheckpoint=height:hash");
+    if (!Checkpoints::ConfigureLocalCheckpoint(GetArg("-localcheckpoint", ""), localCheckpointError))
+        return InitError(localCheckpointError);
     std::string strCpMode = GetArg("-cppolicy", "strict");
 
     if(strCpMode == "strict")
@@ -889,6 +896,10 @@ bool AppInit2()
     }
 
     // ********************************************************* Step 10: load peers
+
+    std::string manualBansError;
+    if (!LoadManualBans(manualBansError))
+        return InitError(manualBansError);
 
     uiInterface.InitMessage(_("Loading addresses..."));
     printf("Loading addresses...\n");

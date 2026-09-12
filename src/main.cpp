@@ -1162,13 +1162,16 @@ bool CheckProofOfWork(uint256 hash, unsigned int nBits)
 // Return maximum amount of blocks that other nodes claim to have
 int GetNumBlocksOfPeers()
 {
-    return std::max(cPeerBlockCounts.median(), Checkpoints::GetTotalBlocksEstimate());
+    return std::max(std::max(cPeerBlockCounts.median(), Checkpoints::GetTotalBlocksEstimate()),
+                    Checkpoints::GetLocalCheckpointHeight());
 }
 
 bool IsInitialBlockDownload()
 {
     LOCK(cs_main);
     if (pindexBest == NULL || nBestHeight < Checkpoints::GetTotalBlocksEstimate())
+        return true;
+    if (nBestHeight < Checkpoints::GetLocalCheckpointHeight())
         return true;
     static int64_t nLastUpdate;
     static CBlockIndex* pindexLastBest;
@@ -1758,6 +1761,10 @@ bool CBlock::SetBestChainInner(CTxDB& txdb, CBlockIndex *pindexNew)
 
 bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
 {
+    // Also covers already-indexed branches and signed-checkpoint reorgs.
+    // Reject before beginning a transaction or disconnecting any wallet history.
+    if (!Checkpoints::CheckLocalCheckpointReorg(pindexNew, pindexBest))
+        return error("SetBestChain(): candidate conflicts with configured local checkpoint");
     uint256 hash = GetHash();
 
     if (!txdb.TxnBegin())
@@ -2123,6 +2130,10 @@ bool CBlock::AcceptBlock()
         return DoS(10, error("AcceptBlock() : prev block not found"));
     CBlockIndex* pindexPrev = (*mi).second;
     int nHeight = pindexPrev->nHeight+1;
+
+    // A local operator choice is not a consensus violation or a peer ban score.
+    if (!Checkpoints::CheckLocalCheckpointBlock(hash, pindexPrev))
+        return error("AcceptBlock(): block %s conflicts with configured local checkpoint", hash.ToString().c_str());
 
 /*    if (IsProofOfWork() && nHeight > LAST_POW_BLOCK)
         return DoS(100, error("AcceptBlock() : reject proof-of-work at height %d", nHeight));  */

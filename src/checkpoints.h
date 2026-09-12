@@ -59,6 +59,15 @@ namespace Checkpoints
     bool SetCheckpointPrivKey(std::string strPrivKey);
     bool SendSyncCheckpoint(uint256 hashCheckpoint);
     bool IsMatureSyncCheckpoint();
+
+    // Optional operator policy. Never broadcast or written into legacy sync-checkpoint state.
+    // Configure once before loading the chain or starting worker threads.
+    bool ConfigureLocalCheckpoint(const std::string& value, std::string& error);
+    int GetLocalCheckpointHeight();
+    const uint256& GetLocalCheckpointHash();
+    bool CheckLocalCheckpoint(const CBlockIndex* tip);
+    bool CheckLocalCheckpointBlock(const uint256& hash, const CBlockIndex* previous);
+    bool CheckLocalCheckpointReorg(const CBlockIndex* tip, const CBlockIndex* current);
 }
 
 // ppcoin: synchronized checkpoint

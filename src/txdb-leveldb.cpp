@@ -404,6 +404,8 @@ bool CTxDB::LoadBlockIndex()
     if (!mapBlockIndex.count(hashBestChain))
         return error("CTxDB::LoadBlockIndex() : hashBestChain not found in the block index");
     pindexBest = mapBlockIndex[hashBestChain];
+    if (!Checkpoints::CheckLocalCheckpoint(pindexBest))
+        return error("Loaded chain conflicts with -localcheckpoint. Preserve the data directory and verify the configured hash; no chain reset was attempted.");
     nBestHeight = pindexBest->nHeight;
     nBestChainTrust = pindexBest->nChainTrust;
 

@@ -8,6 +8,7 @@
 #include "wallet.h"
 #include "db.h"
 #include "walletdb.h"
+#include <boost/assign/list_of.hpp>
 
 using namespace json_spirit;
 using namespace std;
@@ -71,6 +72,60 @@ Value getpeerinfo(const Array& params, bool fHelp)
     }
 
     return ret;
+}
+
+Value setban(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 2 || params.size() > 3)
+        throw runtime_error(
+            "setban <ip> <add|remove> [seconds=86400]\n"
+            "Add or remove a persistent manual IP ban. All P2P ports are covered.\n"
+            "Use a numeric IPv4 or IPv6 address, without a port or subnet.\n"
+            "Adding schedules matching peers for disconnection. Duration: 1 second to 10 years.\n"
+            "This controls connections only; it does not select a chain.");
+    RPCTypeCheck(params, boost::assign::list_of(str_type)(str_type)(int_type));
+    CNetAddr address;
+    if (!ParseBanAddress(params[0].get_str(), address))
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Expected a numeric IP address without a port or subnet");
+    const std::string action = params[1].get_str();
+    int64_t until = 0;
+    if (action == "add") {
+        const int64_t duration = params.size() == 3 ? params[2].get_int64() : 86400;
+        if (duration <= 0 || duration > int64_t(10) * 365 * 24 * 60 * 60)
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Ban duration must be between 1 second and 10 years");
+        until = GetTime() + duration;
+    } else if (action != "remove" || params.size() != 2) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Use add [seconds] or remove");
+    }
+    std::string message;
+    if (!UpdateManualBan(address, until, message))
+        throw JSONRPCError(RPC_MISC_ERROR, message);
+    return Value::null;
+}
+
+Value listbanned(const Array& params, bool fHelp)
+{
+    if (fHelp || !params.empty())
+        throw runtime_error("listbanned\nList active persistent manual IP bans. Automatic misbehavior bans are separate.");
+    Array result;
+    for (const auto& ban : GetManualBans()) {
+        Object entry;
+        entry.push_back(Pair("address", ban.first.ToStringIP()));
+        entry.push_back(Pair("banned_until", ban.second));
+        entry.push_back(Pair("ban_reason", "manually added"));
+        result.push_back(entry);
+    }
+    return result;
+}
+
+Value clearbanned(const Array& params, bool fHelp)
+{
+    if (fHelp || !params.empty())
+        throw runtime_error("clearbanned\nRemove all persistent manual bans. Automatic misbehavior bans are unchanged.");
+    std::string message;
+    if (!ClearManualBans(message))
+        throw JSONRPCError(RPC_MISC_ERROR, message);
+    return Value::null;
 }
 
 Value addnode(const Array& params, bool fHelp)

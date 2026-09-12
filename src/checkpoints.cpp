@@ -4,6 +4,7 @@
 
 #include <boost/assign/list_of.hpp> // for 'map_list_of()'
 #include <boost/foreach.hpp>
+#include <climits>
 
 #include "checkpoints.h"
 
@@ -16,6 +17,73 @@ static const int nCheckpointSpan = 10;
 
 namespace Checkpoints
 {
+    static int localCheckpointHeight = -1;
+    static uint256 localCheckpointHash = 0;
+
+    bool ConfigureLocalCheckpoint(const std::string& value, std::string& message)
+    {
+        if (value.empty()) {
+            localCheckpointHeight = -1;
+            localCheckpointHash = 0;
+            return true;
+        }
+        const size_t split = value.find(':');
+        if (split == std::string::npos || split == 0 || value.size() - split - 1 != 64) {
+            message = "Invalid -localcheckpoint: use height:64-character-block-hash";
+            return false;
+        }
+        int height = 0;
+        for (size_t i = 0; i < split; ++i) {
+            const char c = value[i];
+            if (c < '0' || c > '9' || height > (INT_MAX - (c - '0')) / 10) {
+                message = "Invalid -localcheckpoint height";
+                return false;
+            }
+            height = height * 10 + (c - '0');
+        }
+        const std::string hash = value.substr(split + 1);
+        if (!IsHex(hash) || uint256(hash) == 0) {
+            message = "Invalid -localcheckpoint hash";
+            return false;
+        }
+        localCheckpointHeight = height;
+        localCheckpointHash = uint256(hash);
+        return true;
+    }
+
+    int GetLocalCheckpointHeight() { return localCheckpointHeight; }
+    const uint256& GetLocalCheckpointHash() { return localCheckpointHash; }
+
+    bool CheckLocalCheckpoint(const CBlockIndex* tip)
+    {
+        if (localCheckpointHeight < 0 || !tip || tip->nHeight < localCheckpointHeight)
+            return true; // Allow initial sync up to the selected height.
+        while (tip && tip->nHeight > localCheckpointHeight)
+            tip = tip->pprev;
+        return tip && tip->nHeight == localCheckpointHeight &&
+               tip->GetBlockHash() == localCheckpointHash;
+    }
+
+    bool CheckLocalCheckpointBlock(const uint256& hash, const CBlockIndex* previous)
+    {
+        if (localCheckpointHeight < 0)
+            return true;
+        const int height = previous ? previous->nHeight + 1 : 0;
+        if (height == localCheckpointHeight)
+            return hash == localCheckpointHash;
+        return CheckLocalCheckpoint(previous);
+    }
+
+    bool CheckLocalCheckpointReorg(const CBlockIndex* tip, const CBlockIndex* current)
+    {
+        if (localCheckpointHeight < 0)
+            return true;
+        if (!tip || (current && current->nHeight >= localCheckpointHeight &&
+                     tip->nHeight < localCheckpointHeight))
+            return false;
+        return CheckLocalCheckpoint(tip);
+    }
+
     typedef std::map<int, uint256> MapCheckpoints;
 
     //

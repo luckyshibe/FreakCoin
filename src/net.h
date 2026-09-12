@@ -30,6 +30,12 @@ inline unsigned int ReceiveFloodSize() { return 1000*GetArg("-maxreceivebuffer",
 inline unsigned int SendBufferSize() { return 1000*GetArg("-maxsendbuffer", 1*1000); }
 
 void AddOneShot(std::string strDest);
+bool ParseBanAddress(const std::string& value, CNetAddr& address);
+bool LoadManualBans(std::string& message);
+bool UpdateManualBan(const CNetAddr& address, int64_t until, std::string& message);
+bool ClearManualBans(std::string& message);
+std::map<CNetAddr, int64_t> GetManualBans();
+bool IsManuallyBanned(const CNetAddr& address);
 bool RecvLine(SOCKET hSocket, std::string& strLine);
 bool GetMyExternalIP(CNetAddr& ipRet);
 void AddressCurrentlyConnected(const CService& addr);

@@ -303,5 +303,14 @@ Value getcheckpoint(const Array& params, bool fHelp)
     if (mapArgs.count("-checkpointkey"))
         result.push_back(Pair("checkpointmaster", true));
 
+    if (Checkpoints::GetLocalCheckpointHeight() >= 0) {
+        Object local;
+        local.push_back(Pair("height", Checkpoints::GetLocalCheckpointHeight()));
+        local.push_back(Pair("hash", Checkpoints::GetLocalCheckpointHash().GetHex()));
+        local.push_back(Pair("verified", nBestHeight >= Checkpoints::GetLocalCheckpointHeight() &&
+                             Checkpoints::CheckLocalCheckpoint(pindexBest)));
+        result.push_back(Pair("localcheckpoint", local));
+    }
+
     return result;
 }
