@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <fstream>
 #include <cerrno>
+#include <ctime>
 
 #include "wallet.h"
 #include "walletdb.h"
@@ -416,4 +417,116 @@ BOOST_AUTO_TEST_CASE(orphan_cache_limits_preserve_ancestry_and_accounting)
     BOOST_REQUIRE(AddOrphanBlock(parent));
     BOOST_CHECK_EQUAL(LimitOrphanBlocks(750, 1024 * 1024), 0U);
     LimitOrphanBlocks(0, 0);
+}
+
+// Retain a queued byte to suppress the socket layer's optimistic write. These
+// tests exercise real getblocks serialization without opening any sockets.
+static void QueueWithoutSocket(CNode& node)
+{
+    node.vSendMsg.push_back(CSerializeData(1, 0));
+    node.nSendSize = 1;
+    node.ssSend.SetVersion(PROTOCOL_VERSION);
+}
+
+static void CheckGetBlocksMessage(CNode& node, const CBlockLocator& locator, uint256 stop)
+{
+    BOOST_REQUIRE_EQUAL(node.vSendMsg.size(), 2U);
+    CDataStream message(node.vSendMsg.back(), SER_NETWORK, PROTOCOL_VERSION);
+    CMessageHeader header;
+    message >> header;
+    BOOST_CHECK_EQUAL(header.GetCommand(), "getblocks");
+    BOOST_CHECK_EQUAL(header.nMessageSize, message.size());
+    const uint256 checksum = Hash(message.begin(), message.end());
+    unsigned int expectedChecksum;
+    memcpy(&expectedChecksum, &checksum, sizeof(expectedChecksum));
+    BOOST_CHECK_EQUAL(header.nChecksum, expectedChecksum);
+    CDataStream expected(SER_NETWORK, PROTOCOL_VERSION);
+    expected << locator << stop;
+    BOOST_CHECK_EQUAL_COLLECTIONS(message.begin(), message.end(), expected.begin(), expected.end());
+    node.nSendSize -= node.vSendMsg.back().size();
+    node.vSendMsg.pop_back();
+    BOOST_CHECK_EQUAL(node.nSendSize, 1U);
+}
+
+BOOST_AUTO_TEST_CASE(getblocks_preserves_requests_across_peers_tips_and_side_branches)
+{
+    LOCK(cs_main);
+    std::vector<CBlockIndex> blocks(64);
+    std::vector<uint256> hashes(blocks.size());
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        hashes[i] = uint256(i + 1);
+        blocks[i].phashBlock = &hashes[i];
+        blocks[i].nHeight = i;
+        blocks[i].pprev = i ? &blocks[i - 1] : NULL;
+    }
+    CNode first(INVALID_SOCKET, CAddress(), "test-first", true);
+    CNode second(INVALID_SOCKET, CAddress(), "test-second", true);
+    QueueWithoutSocket(first);
+    QueueWithoutSocket(second);
+    CBlockIndex* tip = &blocks[62];
+    const CBlockLocator original(tip);
+    boost::shared_ptr<const CBlockLocator> firstLocator;
+    for (unsigned int i = 1; i <= 64; ++i) {
+        // All distinct recovery requests must be sent immediately. A global or
+        // per-peer time throttle would drop messages and fail this check.
+        first.PushGetBlocks(tip, uint256(i));
+        CheckGetBlocksMessage(first, original, uint256(i));
+        if (!firstLocator) firstLocator = first.pLastGetBlocksLocator;
+        BOOST_REQUIRE(firstLocator);
+        BOOST_CHECK(first.pLastGetBlocksLocator == firstLocator);
+        second.PushGetBlocks(tip, uint256(i));
+        CheckGetBlocksMessage(second, original, uint256(i));
+        BOOST_CHECK(second.pLastGetBlocksLocator != firstLocator);
+    }
+    first.PushGetBlocks(tip, uint256(64));
+    BOOST_CHECK_EQUAL(first.vSendMsg.size(), 1U); // Existing exact-duplicate filter.
+    first.PushGetBlocks(tip, uint256(0)); // Normal initial sync/continuation.
+    CheckGetBlocksMessage(first, original, uint256(0));
+    BOOST_CHECK(first.pLastGetBlocksLocator == firstLocator);
+    first.PushGetBlocks(&blocks[63], uint256(0)); // Tip advances.
+    CheckGetBlocksMessage(first, CBlockLocator(&blocks[63]), uint256(0));
+    BOOST_CHECK(first.pLastGetBlocksLocator != firstLocator);
+
+    CBlockIndex side;
+    uint256 sideHash(999);
+    side.phashBlock = &sideHash;
+    side.pprev = &blocks[61];
+    side.nHeight = 62; // A different branch at the same height must not reuse tip's locator.
+    first.PushGetBlocks(&side, uint256(0));
+    CheckGetBlocksMessage(first, CBlockLocator(&side), uint256(0));
+    BOOST_CHECK(first.pLastGetBlocksLocator != firstLocator);
+    first.PushGetBlocks(tip, uint256(65)); // Return to earlier tip after branch change.
+    CheckGetBlocksMessage(first, original, uint256(65));
+    first.PushGetBlocks(NULL, uint256(66));
+    CheckGetBlocksMessage(first, CBlockLocator(static_cast<CBlockIndex*>(NULL)), uint256(66));
+    first.PushGetBlocks(tip, uint256(67));
+    CheckGetBlocksMessage(first, original, uint256(67));
+}
+
+BOOST_AUTO_TEST_CASE(getblocks_long_chain_recovery_benchmark)
+{
+    LOCK(cs_main);
+    const size_t height = 812000;
+    const unsigned int requests = 256;
+    std::vector<CBlockIndex> blocks(height + 1);
+    std::vector<uint256> hashes(blocks.size());
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        hashes[i] = uint256(i + 1);
+        blocks[i].phashBlock = &hashes[i];
+        blocks[i].nHeight = i;
+        blocks[i].pprev = i ? &blocks[i - 1] : NULL;
+    }
+    CNode node(INVALID_SOCKET, CAddress(), "benchmark", true);
+    QueueWithoutSocket(node);
+    const CBlockLocator expected(&blocks.back());
+    const std::clock_t start = std::clock();
+    for (unsigned int i = 1; i <= requests; ++i) {
+        node.PushGetBlocks(&blocks.back(), uint256(i));
+        CheckGetBlocksMessage(node, expected, uint256(i));
+    }
+    const double seconds = double(std::clock() - start) / CLOCKS_PER_SEC;
+    // Report CPU time, not a fragile pass/fail wall-clock threshold. The companion
+    // reuse test verifies caching deterministically; this reproduces the hot path.
+    BOOST_TEST_MESSAGE("getblocks benchmark: height=" << height << ", requests=" << requests
+                       << ", CPU seconds=" << seconds);
 }

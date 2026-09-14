@@ -8,6 +8,7 @@
 #include <deque>
 #include <boost/array.hpp>
 #include <boost/foreach.hpp>
+#include <boost/shared_ptr.hpp>
 #include <openssl/rand.h>
 
 #ifndef WIN32
@@ -22,6 +23,7 @@
 class CRequestTracker;
 class CNode;
 class CBlockIndex;
+class CBlockLocator;
 extern int nBestHeight;
 
 
@@ -239,6 +241,7 @@ public:
     uint256 hashContinue;
     CBlockIndex* pindexLastGetBlocksBegin;
     uint256 hashLastGetBlocksEnd;
+    boost::shared_ptr<const CBlockLocator> pLastGetBlocksLocator;
     int nStartingHeight;
 
     // flood relay

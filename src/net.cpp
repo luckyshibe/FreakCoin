@@ -252,13 +252,21 @@ unsigned short GetListenPort()
 
 void CNode::PushGetBlocks(CBlockIndex* pindexBegin, uint256 hashEnd)
 {
+    AssertLockHeld(cs_main);
     // Filter out duplicate requests
     if (pindexBegin == pindexLastGetBlocksBegin && hashEnd == hashLastGetBlocksEnd)
         return;
+
+    // Different orphan roots need the same locator while our starting block is
+    // unchanged. Building it walks the entire ancestry; retain one per peer.
+    // Indexed blocks/pprev are stable for the node lifetime. A different start
+    // (including a same-height fork) rebuilds it. Do not delay recovery requests.
+    if (!pLastGetBlocksLocator || pindexBegin != pindexLastGetBlocksBegin)
+        pLastGetBlocksLocator.reset(new CBlockLocator(pindexBegin));
     pindexLastGetBlocksBegin = pindexBegin;
     hashLastGetBlocksEnd = hashEnd;
 
-    PushMessage("getblocks", CBlockLocator(pindexBegin), hashEnd);
+    PushMessage("getblocks", *pLastGetBlocksLocator, hashEnd);
 }
 
 // find 'best' local address for a particular peer
