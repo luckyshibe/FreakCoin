@@ -59,8 +59,12 @@ int64_t nTimeBestReceived = 0;
 CMedianFilter<int> cPeerBlockCounts(5, 0); // Amount of blocks that other nodes claim to have
 
 map<uint256, CBlock*> mapOrphanBlocks;
-multimap<uint256, CBlock*> mapOrphanBlocksByPrev;
+// Cache child hashes as well as parent hashes; walking this index must not
+// recompute the scrypt hash of every retained block.
+multimap<uint256, uint256> mapOrphanBlocksByPrev;
 set<pair<COutPoint, unsigned int> > setStakeSeenOrphan;
+// Keep membership until the last orphan using a stake has been removed.
+static map<pair<COutPoint, unsigned int>, unsigned int> mapOrphanStakeCounts;
 static uint64_t nOrphanBlockBytes = 0;
 
 map<uint256, CTransaction> mapOrphanTransactions;
@@ -2244,10 +2248,13 @@ bool AddOrphanBlock(const CBlock& block)
         return false;
     CBlock* copy = new CBlock(block);
     mapOrphanBlocks.insert(make_pair(hash, copy));
-    mapOrphanBlocksByPrev.insert(make_pair(copy->hashPrevBlock, copy));
+    mapOrphanBlocksByPrev.insert(make_pair(copy->hashPrevBlock, hash));
     nOrphanBlockBytes += ::GetSerializeSize(*copy, SER_NETWORK, PROTOCOL_VERSION);
-    if (copy->IsProofOfStake())
-        setStakeSeenOrphan.insert(copy->GetProofOfStake());
+    if (copy->IsProofOfStake()) {
+        const pair<COutPoint, unsigned int> stake = copy->GetProofOfStake();
+        if (++mapOrphanStakeCounts[stake] == 1)
+            setStakeSeenOrphan.insert(stake);
+    }
     return true;
 }
 
@@ -2258,9 +2265,9 @@ void EraseOrphanBlock(const uint256& hash)
     if (found == mapOrphanBlocks.end())
         return;
     CBlock* block = found->second;
-    for (multimap<uint256, CBlock*>::iterator it = mapOrphanBlocksByPrev.lower_bound(block->hashPrevBlock);
+    for (multimap<uint256, uint256>::iterator it = mapOrphanBlocksByPrev.lower_bound(block->hashPrevBlock);
          it != mapOrphanBlocksByPrev.upper_bound(block->hashPrevBlock); ++it) {
-        if (it->second == block) {
+        if (it->second == hash) {
             mapOrphanBlocksByPrev.erase(it);
             break;
         }
@@ -2269,12 +2276,12 @@ void EraseOrphanBlock(const uint256& hash)
     mapOrphanBlocks.erase(found);
     if (block->IsProofOfStake()) {
         const pair<COutPoint, unsigned int> stake = block->GetProofOfStake();
-        bool stillSeen = false;
-        BOOST_FOREACH(const PAIRTYPE(uint256, CBlock*)& item, mapOrphanBlocks)
-            if (item.second->IsProofOfStake() && item.second->GetProofOfStake() == stake)
-                stillSeen = true;
-        if (!stillSeen)
+        map<pair<COutPoint, unsigned int>, unsigned int>::iterator count = mapOrphanStakeCounts.find(stake);
+        assert(count != mapOrphanStakeCounts.end() && count->second > 0);
+        if (--count->second == 0) {
+            mapOrphanStakeCounts.erase(count);
             setStakeSeenOrphan.erase(stake);
+        }
     }
     delete block;
 }
@@ -2286,10 +2293,13 @@ unsigned int LimitOrphanBlocks(unsigned int maxCount, uint64_t maxBytes)
     while (!mapOrphanBlocks.empty() &&
            (mapOrphanBlocks.size() > maxCount || nOrphanBlockBytes > maxBytes)) {
         // Evict a leaf so a retained child never loses its cached parent.
-        CBlock* leaf = mapOrphanBlocks.begin()->second;
-        while (mapOrphanBlocksByPrev.count(leaf->GetHash()))
-            leaf = mapOrphanBlocksByPrev.find(leaf->GetHash())->second;
-        EraseOrphanBlock(leaf->GetHash());
+        // The same first-child traversal and eviction order, using hashes
+        // already computed at insertion instead of running scrypt per step.
+        uint256 hashLeaf = mapOrphanBlocks.begin()->first;
+        multimap<uint256, uint256>::iterator child;
+        while ((child = mapOrphanBlocksByPrev.find(hashLeaf)) != mapOrphanBlocksByPrev.end())
+            hashLeaf = child->second;
+        EraseOrphanBlock(hashLeaf);
         ++removed;
     }
     return removed;
@@ -2381,15 +2391,18 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     for (unsigned int i = 0; i < vWorkQueue.size(); i++)
     {
         uint256 hashPrev = vWorkQueue[i];
-        for (multimap<uint256, CBlock*>::iterator mi = mapOrphanBlocksByPrev.lower_bound(hashPrev);
+        for (multimap<uint256, uint256>::iterator mi = mapOrphanBlocksByPrev.lower_bound(hashPrev);
              mi != mapOrphanBlocksByPrev.upper_bound(hashPrev);
              )
         {
-            CBlock* pblockOrphan = (*mi).second;
+            const uint256 hashOrphan = mi->second;
+            map<uint256, CBlock*>::iterator orphan = mapOrphanBlocks.find(hashOrphan);
+            assert(orphan != mapOrphanBlocks.end());
+            CBlock* pblockOrphan = orphan->second;
             ++mi;
             if (pblockOrphan->AcceptBlock())
-                vWorkQueue.push_back(pblockOrphan->GetHash());
-            EraseOrphanBlock(pblockOrphan->GetHash());
+                vWorkQueue.push_back(hashOrphan);
+            EraseOrphanBlock(hashOrphan);
         }
         mapOrphanBlocksByPrev.erase(hashPrev);
     }

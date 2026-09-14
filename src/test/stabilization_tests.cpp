@@ -419,6 +419,157 @@ BOOST_AUTO_TEST_CASE(orphan_cache_limits_preserve_ancestry_and_accounting)
     LimitOrphanBlocks(0, 0);
 }
 
+
+extern std::set<std::pair<COutPoint, unsigned int> > setStakeSeenOrphan;
+
+// Synthetic cache entries, not valid mainnet blocks. AddOrphanBlock tests
+// bookkeeping; ProcessBlock remains responsible for validating real blocks.
+static CBlock MakeOrphanStake(unsigned int nonce, unsigned int stakeId)
+{
+    CBlock block;
+    block.nTime = 123456;
+    block.nNonce = nonce;
+    block.vtx.resize(2);
+    CTransaction& stake = block.vtx[1];
+    stake.nTime = block.nTime;
+    stake.vin.push_back(CTxIn(COutPoint(uint256(stakeId), 0)));
+    stake.vout.resize(2);
+    stake.vout[0].SetEmpty();
+    stake.vout[1].nValue = COIN;
+    return block;
+}
+
+BOOST_AUTO_TEST_CASE(orphan_stake_tracking_keeps_duplicates_until_last_removal)
+{
+    LOCK(cs_main);
+    BOOST_REQUIRE(mapOrphanBlocks.empty());
+    BOOST_REQUIRE(setStakeSeenOrphan.empty());
+    CBlock first = MakeOrphanStake(10, 1);
+    CBlock second = MakeOrphanStake(11, 1);
+    second.hashPrevBlock = first.GetHash();
+    CBlock unrelated = MakeOrphanStake(12, 2);
+    CBlock work;
+    work.nNonce = 13;
+    const std::pair<COutPoint, unsigned int> sharedStake = first.GetProofOfStake();
+    const std::pair<COutPoint, unsigned int> otherStake = unrelated.GetProofOfStake();
+
+    BOOST_REQUIRE(first.IsProofOfStake());
+    BOOST_REQUIRE(second.GetProofOfStake() == sharedStake);
+    BOOST_REQUIRE(work.IsProofOfWork());
+    BOOST_REQUIRE(AddOrphanBlock(first));
+    BOOST_REQUIRE(AddOrphanBlock(second));
+    BOOST_REQUIRE(AddOrphanBlock(unrelated));
+    BOOST_REQUIRE(AddOrphanBlock(work));
+    BOOST_CHECK(!AddOrphanBlock(first));
+    BOOST_CHECK_EQUAL(setStakeSeenOrphan.size(), 2U);
+
+    // An accepted parent can be removed while its child is still cached.
+    EraseOrphanBlock(first.GetHash());
+    BOOST_CHECK(setStakeSeenOrphan.count(sharedStake));
+    EraseOrphanBlock(first.GetHash()); // Missing removals must be harmless.
+    BOOST_CHECK(setStakeSeenOrphan.count(sharedStake));
+    EraseOrphanBlock(unrelated.GetHash());
+    BOOST_CHECK(!setStakeSeenOrphan.count(otherStake));
+    BOOST_CHECK(setStakeSeenOrphan.count(sharedStake));
+    EraseOrphanBlock(second.GetHash());
+    BOOST_CHECK(!setStakeSeenOrphan.count(sharedStake));
+    BOOST_CHECK_EQUAL(LimitOrphanBlocks(0, 0), 1U);
+    BOOST_CHECK(setStakeSeenOrphan.empty());
+
+    // Duplicate insertion or deletion must not leave a hidden extra reference.
+    BOOST_REQUIRE(AddOrphanBlock(first));
+    EraseOrphanBlock(first.GetHash());
+    BOOST_CHECK(setStakeSeenOrphan.empty());
+    BOOST_CHECK_EQUAL(LimitOrphanBlocks(750, 0), 0U);
+}
+
+BOOST_AUTO_TEST_CASE(orphan_eviction_matches_legacy_order_for_branches_and_late_parents)
+{
+    LOCK(cs_main);
+    BOOST_REQUIRE(mapOrphanBlocks.empty());
+    BOOST_REQUIRE(setStakeSeenOrphan.empty());
+    const int parents[] = {-1, 0, 0, 1, 1, 3, -1, 6, 7, 7};
+    const unsigned int order[] = {5, 4, 2, 0, 8, 6, 1, 9, 3, 7};
+    std::vector<CBlock> blocks(10);
+    std::vector<uint256> hashes(10);
+    for (unsigned int i = 0; i < blocks.size(); ++i) {
+        blocks[i] = MakeOrphanStake(100 + i, 1 + i % 3);
+        blocks[i].hashPrevBlock = parents[i] < 0 ? uint256(1000 + i) : hashes[parents[i]];
+        hashes[i] = blocks[i].GetHash();
+    }
+    std::map<uint256, const CBlock*> legacyBlocks;
+    std::multimap<uint256, const CBlock*> legacyByPrev;
+    for (unsigned int i = 0; i < blocks.size(); ++i) {
+        const unsigned int index = order[i];
+        BOOST_REQUIRE(AddOrphanBlock(blocks[index]));
+        legacyBlocks.insert(std::make_pair(hashes[index], &blocks[index]));
+        legacyByPrev.insert(std::make_pair(blocks[index].hashPrevBlock, &blocks[index]));
+    }
+    while (!legacyBlocks.empty()) {
+        // Reference the previous implementation's selection, including the
+        // insertion order among siblings. It deliberately recalculates hashes.
+        const CBlock* leaf = legacyBlocks.begin()->second;
+        while (legacyByPrev.count(leaf->GetHash()))
+            leaf = legacyByPrev.find(leaf->GetHash())->second;
+        const uint256 expected = leaf->GetHash();
+        BOOST_CHECK_EQUAL(LimitOrphanBlocks(legacyBlocks.size() - 1, 64 * 1024 * 1024), 1U);
+        BOOST_CHECK(!mapOrphanBlocks.count(expected));
+        for (std::multimap<uint256, const CBlock*>::iterator it = legacyByPrev.lower_bound(leaf->hashPrevBlock);
+             it != legacyByPrev.upper_bound(leaf->hashPrevBlock); ++it) {
+            if (it->second == leaf) {
+                legacyByPrev.erase(it);
+                break;
+            }
+        }
+        legacyBlocks.erase(expected);
+        BOOST_CHECK_EQUAL(mapOrphanBlocks.size(), legacyBlocks.size());
+        std::set<std::pair<COutPoint, unsigned int> > expectedStakes;
+        for (std::map<uint256, const CBlock*>::const_iterator it = legacyBlocks.begin();
+             it != legacyBlocks.end(); ++it) {
+            BOOST_CHECK(mapOrphanBlocks.count(it->first));
+            expectedStakes.insert(it->second->GetProofOfStake());
+        }
+        BOOST_CHECK(setStakeSeenOrphan == expectedStakes);
+    }
+    BOOST_CHECK_EQUAL(LimitOrphanBlocks(750, 0), 0U);
+}
+
+BOOST_AUTO_TEST_CASE(orphan_long_chain_eviction_benchmark)
+{
+    LOCK(cs_main);
+    BOOST_REQUIRE(mapOrphanBlocks.empty());
+    BOOST_REQUIRE(setStakeSeenOrphan.empty());
+    const unsigned int retained = 750;
+    const unsigned int requests = 256;
+    uint256 previous(42);
+    std::vector<uint256> hashes;
+    for (unsigned int i = 0; i < retained; ++i) {
+        CBlock block = MakeOrphanStake(1000 + i, 1000 + i);
+        block.hashPrevBlock = previous;
+        BOOST_REQUIRE(AddOrphanBlock(block));
+        previous = block.GetHash();
+        hashes.push_back(previous);
+    }
+    CBlock leaf = MakeOrphanStake(2000, 2000);
+    leaf.hashPrevBlock = previous;
+    const uint256 hashLeaf = leaf.GetHash();
+    const std::clock_t started = std::clock();
+    for (unsigned int i = 0; i < requests; ++i) {
+        BOOST_REQUIRE(AddOrphanBlock(leaf));
+        BOOST_REQUIRE_EQUAL(LimitOrphanBlocks(retained, 64 * 1024 * 1024), 1U);
+        BOOST_REQUIRE(!mapOrphanBlocks.count(hashLeaf));
+    }
+    const double seconds = double(std::clock() - started) / CLOCKS_PER_SEC;
+    BOOST_TEST_MESSAGE("orphan eviction benchmark: retained=" << retained
+                       << ", requests=" << requests << ", CPU seconds=" << seconds);
+    BOOST_CHECK_EQUAL(mapOrphanBlocks.size(), retained);
+    BOOST_CHECK_EQUAL(setStakeSeenOrphan.size(), retained);
+    for (unsigned int i = 0; i < hashes.size(); ++i)
+        BOOST_CHECK(mapOrphanBlocks.count(hashes[i]));
+    BOOST_CHECK_EQUAL(LimitOrphanBlocks(0, 0), retained);
+    BOOST_CHECK(setStakeSeenOrphan.empty());
+}
+
 // Retain a queued byte to suppress the socket layer's optimistic write. These
 // tests exercise real getblocks serialization without opening any sockets.
 static void QueueWithoutSocket(CNode& node)
