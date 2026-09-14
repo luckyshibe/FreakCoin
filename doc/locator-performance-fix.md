@@ -78,7 +78,7 @@ cd ~/compil/FreakCoin-locator-fix
 git --no-pager status --short
 git --no-pager log -1 --format='%H %s'
 ldd src/FreakChaind | grep -E 'libdb|not found'
-./src/FreakChaind --help | head -n 1
+./src/FreakChaind -datadir=/home/crypto-data/wallets/.FreakChain --help | head -n 1
 ```
 
 Expect no tracked changes, the reviewed published commit, `libdb_cxx-5.3.so`, no missing dependencies, and a matching build version. Keep the working daemon running until build/tests/linkage checks all pass.
