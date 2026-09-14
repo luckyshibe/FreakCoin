@@ -1,5 +1,30 @@
 # Orphan cleanup candidate — 14 September 2026
 
+## VPS tests passed; finish this rollout and pause performance work
+
+On 14 September 2026, Renato supplied successful native test output after the
+build instructions targeting `7b4e82ab28e8cc01863fef7d34fd82c4010c7a99`:
+
+- All 18 stabilization cases passed with "No errors detected".
+- Both the RPC smoke suite and peer-policy suite passed.
+- The synthetic 750-block orphan benchmark completed 256 add/evict requests in
+  0.114213 CPU seconds.
+- The synthetic height-812000 locator benchmark completed 256 requests in
+  0.028245 CPU seconds.
+
+These are VPS test results, not measurements of the candidate serving the live
+pool. Production installation and startup confirmation are still pending in the
+last supplied output. The last confirmed running production version is b9ec404.
+
+Renato explicitly asked to stop spending time on performance tuning after this
+rollout. The remaining work is the normal stopped backup and binary replacement,
+then basic version, startup, checkpoint/chain and actual Yiimp status-page checks.
+Do not require another profiling session, benchmark campaign or performance patch
+unless a concrete operational failure appears or Renato asks to resume tuning.
+
+This update changes documentation only. Keep the binary already compiled from
+7b4e82a; no pull, rebuild, or repeat of the passed suites is needed for these notes.
+
 ## Current production evidence
 
 Production is running `b9ec4048fbb2a0c2fc02905db04df9459eb8de28`
@@ -85,12 +110,13 @@ forests against the previous bookkeeping/selection behavior, including count
 and byte limits, duplicates and arbitrary removal; the states and eviction
 orders matched. That is a review aid, not execution of the C++ implementation.
 
-**No C++ build, native regression run, Windows build, or production test of this
-candidate was performed by the assistant: its execution workspace was unavailable.**
-The VPS build and tests below are required before replacing the running daemon.
-Do not treat the earlier b9ec404 test results as results for this candidate.
+The assistant's execution workspace was unavailable, so it performed source
+review and the algorithm-only comparison above. Renato subsequently compiled
+the candidate and supplied the successful native VPS results recorded at the top
+of this document. Windows compilation and live deployment remain unverified here.
+The earlier b9ec404 results are separate from the new 18-case run.
 
-## Compile and test on the VPS
+## Reproducing the completed VPS build
 
 The current locator checkout was created as a detached worktree. Fast-forward it
 to the published candidate on `network-bootstrap`; a detached HEAD can use
@@ -102,7 +128,7 @@ cd ~/compil/FreakCoin-locator-fix &&
 git diff --quiet &&
 git diff --cached --quiet &&
 git fetch origin network-bootstrap &&
-git merge --ff-only origin/network-bootstrap &&
+git merge --ff-only 7b4e82ab28e8cc01863fef7d34fd82c4010c7a99 &&
 git update-index --refresh &&
 python3 tools/build_linux.py --bdb-version 5.3 --check --jobs 2 &&
 python3 tools/test_rpc_smoke.py &&
@@ -122,9 +148,9 @@ The version must contain the checkout's current commit, with no dirty marker.
 Keep Berkeley DB 5.3 for this pool. Compilation, test or version failures should
 be resolved before stopping the working daemon.
 
-## Deployment and comparison still pending
+## Deployment and basic confirmation still pending
 
-After native checks pass, use the agreed workflow: graceful stop, confirm the
+With the native checks now passed, use the agreed workflow: graceful stop, confirm the
 daemon has exited, copy the entire data directory and installed executable to a
 new backup, install the tested executable, and restart with the explicit pool
 data directory. Never delete chain, wallet, or Berkeley DB log files to recover
@@ -136,7 +162,12 @@ The last known complete pre-locator backup is
 Make a new backup of the currently working b9ec404 deployment before replacing
 it with this candidate.
 
-After deployment, verify getinfo, getcheckpoint and getblockhash 811000, then run:
+After deployment, verify the 7b4e82a version in getinfo, normal startup, getcheckpoint,
+getblockhash 811000, and that the actual Yiimp status page loads. That completes
+the agreed performance work for now.
+
+The following measurement command is retained for reference only, if Renato
+later asks for another performance comparison; it is not a deployment gate:
 
 ```sh
 python3 tools/measure_pool.py --label after-orphan-cleanup --seconds 60 > "$HOME/FreakChain-performance-after-orphan-cleanup.json" &&
