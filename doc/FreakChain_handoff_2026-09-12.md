@@ -1,5 +1,15 @@
 # FreakChain project handoff — 12 September 2026
 
+> **Superseded status — 14 September 2026:** The Linux safeguards and verified local
+> checkpoint were deployed after this handoff. Both performance fixes are now in
+> the tested 7b4e82a source; all 18 native cases and both smoke suites passed, and
+> Renato reported that the final rollout "did the trick". Performance work is
+> closed for this phase at his request. Read
+> [the updated cleanup notes](orphan-cleanup-performance.md) for the latest evidence.
+> The older deployment instructions and unresolved-status statements below are
+> historical. Keep the pool on Berkeley DB 5.3; Windows x64/x86 builds remain next.
+> No rebuild is needed for this documentation-only status update.
+
 ## Start here: instructions for the next chat
 
 Read this entire document before proposing changes. This is a continuity summary, not a verbatim chat export. The user is moving from Work mode to regular ChatGPT because usage limits repeatedly interrupted progress.

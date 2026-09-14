@@ -1,6 +1,6 @@
-# Orphan cleanup candidate — 14 September 2026
+# Orphan cleanup fix — 14 September 2026
 
-## VPS tests passed; finish this rollout and pause performance work
+## VPS tests passed; operator confirmed the fix worked
 
 On 14 September 2026, Renato supplied successful native test output after the
 build instructions targeting `7b4e82ab28e8cc01863fef7d34fd82c4010c7a99`:
@@ -12,23 +12,27 @@ build instructions targeting `7b4e82ab28e8cc01863fef7d34fd82c4010c7a99`:
 - The synthetic height-812000 locator benchmark completed 256 requests in
   0.028245 CPU seconds.
 
-These are VPS test results, not measurements of the candidate serving the live
-pool. Production installation and startup confirmation are still pending in the
-last supplied output. The last confirmed running production version is b9ec404.
+After receiving the stop/backup/install/start instructions for the tested
+7b4e82a binary, Renato reported: "that did the trick! thank you !" and requested
+a handoff to regular ChatGPT. Treat this as the operator's successful outcome
+report for this rollout. No fresh getinfo/getcheckpoint printout, exact latest
+height, live CPU measurement, or final backup-directory suffix was supplied.
+Do not invent those values or present the assistant as having deployed remotely.
 
 Renato explicitly asked to stop spending time on performance tuning after this
-rollout. The remaining work is the normal stopped backup and binary replacement,
-then basic version, startup, checkpoint/chain and actual Yiimp status-page checks.
-Do not require another profiling session, benchmark campaign or performance patch
-unless a concrete operational failure appears or Renato asks to resume tuning.
+rollout, and has now accepted the result. Performance work is closed for this
+phase. Do not require another profiling session, benchmark campaign, deployment,
+or performance patch unless a concrete operational failure appears or Renato
+asks to resume tuning. The next planned project area is the Windows wallets.
 
 This update changes documentation only. Keep the binary already compiled from
 7b4e82a; no pull, rebuild, or repeat of the passed suites is needed for these notes.
 
-## Current production evidence
+## Historical measurements before the final cleanup fix
 
-Production is running `b9ec4048fbb2a0c2fc02905db04df9459eb8de28`
-from `/home/shibe/compil/FreakCoin-locator-fix`. The installed executable is
+Before the final cleanup rollout, production was shown running
+`b9ec4048fbb2a0c2fc02905db04df9459eb8de28` from
+`/home/shibe/compil/FreakCoin-locator-fix`. The installed executable is
 `/usr/bin/FreakChaind`, using Berkeley DB 5.3 and the existing data directory
 `/home/crypto-data/wallets/.FreakChain`.
 
@@ -113,7 +117,8 @@ orders matched. That is a review aid, not execution of the C++ implementation.
 The assistant's execution workspace was unavailable, so it performed source
 review and the algorithm-only comparison above. Renato subsequently compiled
 the candidate and supplied the successful native VPS results recorded at the top
-of this document. Windows compilation and live deployment remain unverified here.
+of this document. Windows compilation remains pending. The operator's live success report is
+recorded above; no quantitative post-cleanup production result is claimed.
 The earlier b9ec404 results are separate from the new 18-case run.
 
 ## Reproducing the completed VPS build
@@ -148,23 +153,26 @@ The version must contain the checkout's current commit, with no dirty marker.
 Keep Berkeley DB 5.3 for this pool. Compilation, test or version failures should
 be resolved before stopping the working daemon.
 
-## Deployment and basic confirmation still pending
+## Deployment procedure supplied for the accepted rollout
 
-With the native checks now passed, use the agreed workflow: graceful stop, confirm the
+The supplied procedure followed the agreed workflow: graceful stop, confirm the
 daemon has exited, copy the entire data directory and installed executable to a
 new backup, install the tested executable, and restart with the explicit pool
-data directory. Never delete chain, wallet, or Berkeley DB log files to recover
-from a failed startup.
+data directory. This is historical context, not a request to deploy again.
+Never delete chain, wallet, or Berkeley DB log files to recover from a failed startup.
 
 The last known complete pre-locator backup is
 `/home/shibe/FreakChain-before-locator-CJE36rSn`; it contains the previous
 4568a85 binary, its stopped data snapshot and `backup-complete` marker.
-Make a new backup of the currently working b9ec404 deployment before replacing
-it with this candidate.
+The final install block created a fresh backup under
+`$HOME/FreakChain-before-orphan-cleanup-XXXXXXXX` before replacing the b9ec404
+binary. Its actual generated suffix was not pasted; inspect the saved directories
+if rollback is ever required rather than inventing a path.
 
-After deployment, verify the 7b4e82a version in getinfo, normal startup, getcheckpoint,
-getblockhash 811000, and that the actual Yiimp status page loads. That completes
-the agreed performance work for now.
+The final basic checks requested the 7b4e82a version and empty errors in getinfo,
+the local checkpoint at 811000 with verified=true, and a Yiimp refresh. Renato
+then reported success. Those individual command outputs were not pasted.
+Do not reopen the completed rollout solely to fill this documentation gap.
 
 The following measurement command is retained for reference only, if Renato
 later asks for another performance comparison; it is not a deployment gate:

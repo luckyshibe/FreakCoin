@@ -1,5 +1,11 @@
 # Locator performance fix and Linux rollout — 14 September 2026
 
+> **Historical procedure:** The locator fix was deployed, followed by the orphan
+> cleanup fix in 7b4e82a. All 18 native tests and both smoke suites passed, and
+> Renato confirmed the final update worked. He has closed performance work for
+> this phase. Do not repeat the rollout or measurement campaign below by default;
+> see [the latest cleanup notes](orphan-cleanup-performance.md).
+
 ## Status and finding
 
 The user reports production running `4568a8572eec379ac7b2d4f1cd917474f66efe6a` with the local checkpoint enabled and verified. This supersedes the deployment status in the September12 handoff. The chain is alive, but the message-handler thread consumes roughly one CPU core and Yiimp sometimes returns504.
