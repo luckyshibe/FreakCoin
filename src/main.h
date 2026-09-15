@@ -1107,6 +1107,8 @@ public:
     const uint256* phashBlock;
     CBlockIndex* pprev;
     CBlockIndex* pnext;
+    // In-memory ancestor shortcut; never serialized and independent of pnext.
+    const CBlockIndex* pskip;
     unsigned int nFile;
     unsigned int nBlockPos;
     uint256 nChainTrust; // ppcoin: trust score of block chain
@@ -1144,6 +1146,7 @@ public:
         phashBlock = NULL;
         pprev = NULL;
         pnext = NULL;
+        pskip = NULL;
         nFile = 0;
         nBlockPos = 0;
         nHeight = 0;
@@ -1169,6 +1172,7 @@ public:
         phashBlock = NULL;
         pprev = NULL;
         pnext = NULL;
+        pskip = NULL;
         nFile = nFileIn;
         nBlockPos = nBlockPosIn;
         nHeight = 0;
@@ -1196,6 +1200,27 @@ public:
         nTime          = block.nTime;
         nBits          = block.nBits;
         nNonce         = block.nNonce;
+    }
+
+    const CBlockIndex* GetAncestor(int height) const
+    {
+        if (height < 0 || height > nHeight)
+            return NULL;
+        const CBlockIndex* index = this;
+        while (index && index->nHeight > height) {
+            if (index->pskip && index->pskip->nHeight >= height)
+                index = index->pskip;
+            else
+                index = index->pprev;
+        }
+        return index && index->nHeight == height ? index : NULL;
+    }
+
+    void BuildSkip()
+    {
+        // Clear the lowest set height bit. Parents must be initialized first.
+        // Missing shortcuts fall back to pprev, including during index loading.
+        pskip = pprev && nHeight > 0 ? pprev->GetAncestor(nHeight & (nHeight - 1)) : NULL;
     }
 
     CBlock GetBlockHeader() const
@@ -1480,8 +1505,9 @@ public:
             vHave.push_back(pindex->GetBlockHash());
 
             // Exponentially larger steps back
-            for (int i = 0; pindex && i < nStep; i++)
-                pindex = pindex->pprev;
+            // Preserve the legacy sequence exactly, including whether a step
+            // lands on genesis or passes it. Only the ancestor lookup changes.
+            pindex = nStep > pindex->nHeight ? NULL : pindex->GetAncestor(pindex->nHeight - nStep);
             if (vHave.size() > 10)
                 nStep *= 2;
         }

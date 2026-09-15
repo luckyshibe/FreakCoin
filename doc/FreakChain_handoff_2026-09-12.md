@@ -1,5 +1,11 @@
 # FreakChain project handoff — 12 September 2026
 
+> **15 September continuation:** The user reopened performance work because
+> 7b4e82a still consumed a CPU core. All three fresh message-handler stacks caught
+> locator construction from inventory continuation. See the
+> [current fix and evidence](locator-ancestor-performance.md). The previous
+> phase's closeout below is historical.
+
 > **Superseded status — 14 September 2026:** The Linux safeguards and verified local
 > checkpoint were deployed after this handoff. Both performance fixes are now in
 > the tested 7b4e82a source; all 18 native cases and both smoke suites passed, and

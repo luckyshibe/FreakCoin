@@ -1,5 +1,11 @@
 # Orphan cleanup fix — 14 September 2026
 
+**15 September update:** Renato reported continued CPU saturation on 7b4e82a.
+New stacks caught locator construction from inventory continuation in all three
+samples. Performance work is reopened for that measured issue; see
+[locator ancestor lookup](locator-ancestor-performance.md). The earlier accepted
+responsiveness improvement and closeout below are historical.
+
 ## VPS tests passed; operator confirmed the fix worked
 
 On 14 September 2026, Renato supplied successful native test output after the

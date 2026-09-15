@@ -681,3 +681,146 @@ BOOST_AUTO_TEST_CASE(getblocks_long_chain_recovery_benchmark)
     BOOST_TEST_MESSAGE("getblocks benchmark: height=" << height << ", requests=" << requests
                        << ", CPU seconds=" << seconds);
 }
+
+// Independent oracle: the exact locator walk used before ancestor shortcuts.
+static CBlockLocator LegacyLocator(const CBlockIndex* index)
+{
+    std::vector<uint256> have;
+    int step = 1;
+    while (index) {
+        have.push_back(index->GetBlockHash());
+        for (int i = 0; index && i < step; ++i)
+            index = index->pprev;
+        if (have.size() > 10) step *= 2;
+    }
+    have.push_back(fTestNet ? hashGenesisBlockTestNet : hashGenesisBlock);
+    return CBlockLocator(have);
+}
+
+static void CheckLegacyLocator(const CBlockIndex* index)
+{
+    CDataStream expected(SER_NETWORK, PROTOCOL_VERSION);
+    CDataStream actual(SER_NETWORK, PROTOCOL_VERSION);
+    expected << LegacyLocator(index);
+    actual << CBlockLocator(index);
+    BOOST_CHECK_EQUAL_COLLECTIONS(actual.begin(), actual.end(), expected.begin(), expected.end());
+}
+
+BOOST_AUTO_TEST_CASE(locator_shortcuts_preserve_legacy_bytes_and_branch_ancestors)
+{
+    LOCK(cs_main);
+    std::vector<CBlockIndex> blocks(2049), side(1025);
+    std::vector<uint256> hashes(blocks.size()), sideHashes(side.size());
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        hashes[i] = uint256(i + 1);
+        blocks[i].phashBlock = &hashes[i];
+        blocks[i].nHeight = i;
+        blocks[i].pprev = i ? &blocks[i - 1] : NULL;
+        // An index without shortcuts must still work (startup/test fixtures).
+        CheckLegacyLocator(&blocks[i]);
+        blocks[i].BuildSkip();
+    }
+    for (size_t i = 0; i < side.size(); ++i) {
+        sideHashes[i] = uint256(10000 + i);
+        side[i].phashBlock = &sideHashes[i];
+        side[i].nHeight = 1024 + i;
+        side[i].pprev = i ? &side[i - 1] : &blocks[1023];
+        side[i].BuildSkip();
+    }
+    for (int height = 0; height <= 2048; ++height) {
+        BOOST_CHECK(blocks.back().GetAncestor(height) == &blocks[height]);
+        BOOST_CHECK(side.back().GetAncestor(height) ==
+                    (height < 1024 ? &blocks[height] : &side[height - 1024]));
+    }
+    BOOST_CHECK(blocks.back().GetAncestor(-1) == NULL);
+    BOOST_CHECK(blocks.back().GetAncestor(2049) == NULL);
+
+    // Every height covers genesis, all step boundaries, and both genesis tails.
+    // Switching forward/main-chain links must not change a branch's ancestors.
+    const bool previousTestNet = fTestNet;
+    for (int network = 0; network < 2; ++network) {
+        fTestNet = network != 0;
+        CheckLegacyLocator(NULL);
+        for (size_t i = 0; i < blocks.size(); ++i) {
+            blocks[i].pnext = network && i + 1 < blocks.size() ? &blocks[i + 1] : NULL;
+            CheckLegacyLocator(&blocks[i]);
+        }
+        for (size_t i = 0; i < side.size(); ++i)
+            CheckLegacyLocator(&side[i]);
+    }
+    fTestNet = previousTestNet;
+}
+
+BOOST_AUTO_TEST_CASE(locator_shortcuts_are_not_serialized_and_can_be_rebuilt)
+{
+    LOCK(cs_main);
+    std::vector<CBlockIndex> blocks(513);
+    std::vector<uint256> hashes(blocks.size());
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        hashes[i] = uint256(i + 1);
+        blocks[i].phashBlock = &hashes[i];
+        blocks[i].nHeight = i;
+        blocks[i].pprev = i ? &blocks[i - 1] : NULL;
+        blocks[i].BuildSkip();
+    }
+    CDiskBlockIndex disk(&blocks.back());
+    BOOST_REQUIRE(disk.pskip != NULL);
+    CDataStream withShortcut(SER_DISK, CLIENT_VERSION);
+    withShortcut << disk;
+    disk.pskip = NULL;
+    CDataStream withoutShortcut(SER_DISK, CLIENT_VERSION);
+    withoutShortcut << disk;
+    BOOST_CHECK_EQUAL_COLLECTIONS(withShortcut.begin(), withShortcut.end(),
+                                  withoutShortcut.begin(), withoutShortcut.end());
+    CDiskBlockIndex restored;
+    withShortcut >> restored;
+    BOOST_CHECK(restored.pskip == NULL);
+    BOOST_CHECK_EQUAL(restored.nHeight, 512);
+
+    // Reconstruct the transient links in the same parent-before-child order
+    // available at restart. No saved pointer is necessary for the old bytes.
+    for (size_t i = 0; i < blocks.size(); ++i) blocks[i].pskip = NULL;
+    CheckLegacyLocator(&blocks.back());
+    for (size_t i = 0; i < blocks.size(); ++i) blocks[i].BuildSkip();
+    for (int height = 0; height <= 512; ++height)
+        BOOST_CHECK(blocks.back().GetAncestor(height) == &blocks[height]);
+    CheckLegacyLocator(&blocks.back());
+}
+
+BOOST_AUTO_TEST_CASE(getblocks_changing_start_long_chain_benchmark)
+{
+    LOCK(cs_main);
+    const size_t height = 812940;
+    const unsigned int requests = 256;
+    std::vector<CBlockIndex> blocks(height + 1);
+    std::vector<uint256> hashes(blocks.size());
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        hashes[i] = uint256(i + 1);
+        blocks[i].phashBlock = &hashes[i];
+        blocks[i].nHeight = i;
+        blocks[i].pprev = i ? &blocks[i - 1] : NULL;
+        blocks[i].BuildSkip();
+    }
+    std::vector<const CBlockIndex*> starts;
+    std::vector<CBlockLocator> expected;
+    const std::clock_t legacyStart = std::clock();
+    for (unsigned int i = 0; i < requests; ++i) {
+        starts.push_back(&blocks[height - (i % 2 ? i * 499 : i * 7)]);
+        expected.push_back(LegacyLocator(starts.back()));
+    }
+    const double legacySeconds = double(std::clock() - legacyStart) / CLOCKS_PER_SEC;
+    CNode node(INVALID_SOCKET, CAddress(), "changing-start-benchmark", true);
+    QueueWithoutSocket(node);
+    const std::clock_t start = std::clock();
+    for (unsigned int i = 0; i < requests; ++i) {
+        // Alternating continuation and orphan requests misses the old cache on
+        // every iteration. Check the entire legacy payload and checksum.
+        const uint256 stop = i % 2 ? uint256(i + 1) : uint256(0);
+        node.PushGetBlocks(const_cast<CBlockIndex*>(starts[i]), stop);
+        CheckGetBlocksMessage(node, expected[i], stop);
+    }
+    const double seconds = double(std::clock() - start) / CLOCKS_PER_SEC;
+    BOOST_TEST_MESSAGE("changing-start getblocks benchmark: height=" << height
+                       << ", requests=" << requests << ", legacy locator CPU seconds=" << legacySeconds
+                       << ", shortcut requests and byte checks CPU seconds=" << seconds);
+}
