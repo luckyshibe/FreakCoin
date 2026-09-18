@@ -3424,10 +3424,13 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         // Don't return addresses older than nCutOff timestamp
         int64_t nCutOff = GetTime() - (nNodeLifespan * 24 * 60 * 60);
         pfrom->vAddrToSend.clear();
-        vector<CAddress> vAddr = addrman.GetAddr();
+        vector<CAddress> vAddr = addrman.GetAddr(nCutOff);
         BOOST_FOREACH(const CAddress &addr, vAddr)
-            if(addr.nTime > nCutOff)
-                pfrom->PushAddress(addr);
+            pfrom->PushAddress(addr);
+        // Complete the request even when no new addresses can be sent. Legacy
+        // clients clear fGetAddr (and finish one-shot discovery) on this reply.
+        if (pfrom->vAddrToSend.empty())
+            pfrom->PushMessage("addr", vector<CAddress>());
     }
 
 

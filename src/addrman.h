@@ -155,8 +155,11 @@ public:
 // ... in at least this many days
 #define ADDRMAN_MIN_FAIL_DAYS 7
 
-// the maximum percentage of nodes to return in a getaddr call
+// the percentage of nodes to return in a getaddr call, subject to the small-table floor
 #define ADDRMAN_GETADDR_MAX_PCT 23
+
+// share a useful handful of peers even when the address table is tiny
+#define ADDRMAN_GETADDR_MIN 16
 
 // the maximum number of nodes to return in a getaddr call
 #define ADDRMAN_GETADDR_MAX 2500
@@ -238,7 +241,7 @@ protected:
 #endif
 
     // Select several addresses at once.
-    void GetAddr_(std::vector<CAddress> &vAddr);
+    void GetAddr_(std::vector<CAddress> &vAddr, int64_t nCutOff);
 
     // Mark an entry as currently-connected-to.
     void Connected_(const CService &addr, int64_t nTime);
@@ -392,6 +395,7 @@ public:
     // Return the number of (unique) addresses in all tables.
     int size()
     {
+        LOCK(cs);
         return vRandom.size();
     }
 
@@ -475,14 +479,15 @@ public:
         return addrRet;
     }
 
-    // Return a bunch of addresses, selected at random.
-    std::vector<CAddress> GetAddr()
+    // Return random addresses newer than the cutoff, filling the sample from
+    // eligible entries rather than discarding old entries after sampling.
+    std::vector<CAddress> GetAddr(int64_t nCutOff = 0)
     {
         Check();
         std::vector<CAddress> vAddr;
         {
             LOCK(cs);
-            GetAddr_(vAddr);
+            GetAddr_(vAddr, nCutOff);
         }
         Check();
         return vAddr;

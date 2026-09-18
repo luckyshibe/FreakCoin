@@ -44,7 +44,13 @@ These checks were run during development; they are available on the VPS too:
 ```sh
 python3 tools/build_linux.py --bdb-version 5.3 --check --jobs 2
 python3 tools/test_rpc_smoke.py
+python3 tools/test_peer_policy.py
+python3 tools/test_peer_discovery.py
 ```
+
+The [peer discovery check](peer-discovery.md) uses a loopback-only relay and
+temporary nodes to verify that an outbound-only wallet configured with the
+pool can automatically discover and connect to another listening peer.
 
 The smoke-test script launches the candidate on private temporary wallets. RPC
 listens on local ephemeral ports; P2P attempts target a reserved, non-listening

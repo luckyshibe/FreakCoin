@@ -76,6 +76,54 @@ static void CreateWalletFile(const std::string& name)
     CWalletDB db(name, "cr+");
 }
 
+BOOST_AUTO_TEST_CASE(address_sharing_includes_small_peer_sets_and_listening_ports)
+{
+    CAddrMan addresses;
+    std::set<std::string> expected;
+    BOOST_CHECK(addresses.GetAddr().empty());
+    for (unsigned int i = 0; i < 16; ++i) {
+        CAddress address(CService(strprintf("8.1.0.%u", i + 1), 16555 + i, false));
+        address.nTime = GetAdjustedTime();
+        BOOST_REQUIRE(addresses.Add(address, address));
+        expected.insert(address.ToStringIPPort());
+        std::vector<CAddress> shared = addresses.GetAddr();
+        std::set<std::string> actual;
+        for (size_t j = 0; j < shared.size(); ++j)
+            actual.insert(shared[j].ToStringIPPort());
+        BOOST_CHECK_EQUAL(shared.size(), expected.size());
+        BOOST_CHECK(actual == expected);
+    }
+    // A private address is not a publicly connectable peer endpoint.
+    BOOST_CHECK(!addresses.Add(CAddress(CService("192.168.1.2", 16555, false)), CNetAddr("8.1.0.1")));
+    BOOST_CHECK_EQUAL(addresses.GetAddr().size(), 16U);
+}
+
+BOOST_AUTO_TEST_CASE(address_sharing_skips_expired_candidates_without_hiding_live_peers)
+{
+    CAddrMan addresses;
+    const int64_t now = GetAdjustedTime();
+    const int64_t cutoff = now - 7 * 24 * 60 * 60;
+    std::set<std::string> expected;
+    for (unsigned int i = 0; i < 200; ++i) {
+        CAddress address(CService(strprintf("12.%u.1.1", i + 1), 16555, false));
+        address.nTime = i < 198 ? cutoff : now;
+        BOOST_REQUIRE(addresses.Add(address, address));
+        if (i >= 198) expected.insert(address.ToStringIPPort());
+    }
+    // Larger tables retain the legacy percentage limit when no entries expire.
+    BOOST_CHECK_EQUAL(addresses.GetAddr().size(), 46U);
+    std::vector<CAddress> shared = addresses.GetAddr(cutoff);
+    std::set<std::string> actual;
+    for (size_t i = 0; i < shared.size(); ++i) {
+        BOOST_CHECK(shared[i].nTime > cutoff);
+        actual.insert(shared[i].ToStringIPPort());
+    }
+    BOOST_CHECK_EQUAL(shared.size(), 2U);
+    BOOST_CHECK(actual == expected);
+    BOOST_CHECK(addresses.GetAddr(now).empty());
+    BOOST_CHECK_EQUAL(addresses.size(), 200); // Filtering does not erase stored peers.
+}
+
 BOOST_AUTO_TEST_CASE(config_creation_is_private_exclusive_and_fails_closed)
 {
     const boost::filesystem::path path = testDirectory / "generated.conf";

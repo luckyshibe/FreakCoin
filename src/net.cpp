@@ -1673,6 +1673,8 @@ void ThreadOpenConnections2(void* parg)
 
         int64_t nANow = GetAdjustedTime();
 
+        const size_t nAddressCount = addrman.size();
+        set<CNetAddr> setSkipped;
         int nTries = 0;
         while (true)
         {
@@ -1680,7 +1682,7 @@ void ThreadOpenConnections2(void* parg)
             CAddress addr = addrman.Select(10 + min(nOutbound,8)*10);
 
             // if we selected an invalid address, restart
-            if (!addr.IsValid() || setConnected.count(addr.GetGroup()) || IsLocal(addr))
+            if (!addr.IsValid())
                 break;
 
             // If we didn't find an appropriate destination after trying 100 addresses fetched from addrman,
@@ -1690,8 +1692,18 @@ void ThreadOpenConnections2(void* parg)
             if (nTries > 100)
                 break;
 
-            if (IsLimited(addr))
+            if (setConnected.count(addr.GetGroup()) || IsLocal(addr) || IsLimited(addr))
+            {
+                // A fresh, connected seed is selected much more often than
+                // older advertised peers. Keep looking within the same bounded
+                // attempt instead of restarting after every seed selection.
+                setSkipped.insert(addr);
+                // Avoid repeatedly sampling a tiny table containing only
+                // ineligible addresses. New arrivals are considered next cycle.
+                if (setSkipped.size() >= nAddressCount)
+                    break;
                 continue;
+            }
 
             // only consider very recently tried nodes after 30 failed attempts
             if (nANow - addr.nLastTry < 600 && nTries < 30)

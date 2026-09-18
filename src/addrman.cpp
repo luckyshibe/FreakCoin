@@ -490,19 +490,27 @@ int CAddrMan::Check_()
 }
 #endif
 
-void CAddrMan::GetAddr_(std::vector<CAddress> &vAddr)
+void CAddrMan::GetAddr_(std::vector<CAddress> &vAddr, int64_t nCutOff)
 {
     int nNodes = ADDRMAN_GETADDR_MAX_PCT*vRandom.size()/100;
+    // The old percentage rounds down to zero for one to four saved peers.
+    // Share small peer sets in full, while keeping larger replies bounded.
+    if (nNodes < ADDRMAN_GETADDR_MIN)
+        nNodes = ADDRMAN_GETADDR_MIN;
     if (nNodes > ADDRMAN_GETADDR_MAX)
         nNodes = ADDRMAN_GETADDR_MAX;
 
-    // perform a random shuffle over the first nNodes elements of vRandom (selecting from all)
-    for (int n = 0; n<nNodes; n++)
+    // Sample without replacement, skipping expired entries until the reply is
+    // full or every entry has been considered. Stale peers must not hide the
+    // few live addresses left in a small network.
+    for (size_t n = 0; n < vRandom.size() && vAddr.size() < (size_t)nNodes; n++)
     {
         int nRndPos = GetRandInt(vRandom.size() - n) + n;
         SwapRandom(n, nRndPos);
         assert(mapInfo.count(vRandom[n]) == 1);
-        vAddr.push_back(mapInfo[vRandom[n]]);
+        const CAddrInfo &info = mapInfo[vRandom[n]];
+        if (info.nTime > nCutOff)
+            vAddr.push_back(info);
     }
 }
 

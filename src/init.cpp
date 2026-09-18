@@ -601,6 +601,11 @@ bool AppInit2()
 
     // ********************************************************* Step 6: network initialization
 
+    // Outbound IPv4 does not require a publicly advertised local address.
+    // Otherwise listen=0 / discover=0 wallets discard every received IPv4
+    // peer address. Explicit -onlynet restrictions still apply via IsLimited.
+    SetReachable(NET_IPV4);
+
     int nSocksVersion = GetArg("-socks", 5);
 
     if (nSocksVersion != 4 && nSocksVersion != 5)
